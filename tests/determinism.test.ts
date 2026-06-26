@@ -4,7 +4,11 @@ import { assertDeterministic } from "../src/engines/conformance.ts";
 
 const SAMPLE = {
   sheet: "Sales",
-  columns: ["Item", "Qty", "Price"],
+  columns: [
+    { id: "item", header: "Item" },
+    { id: "qty", header: "Qty", type: "number" },
+    { id: "price", header: "Price", type: "currency" },
+  ],
   rows: [
     ["Tea", 10, 1200],
     ["Coffee", 5, 1500],

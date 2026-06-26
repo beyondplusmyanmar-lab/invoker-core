@@ -9,6 +9,7 @@ import { registry } from "../../core/registry.ts";
 import { invoke } from "../../core/invoke.ts";
 import { Store } from "../../storage/db.ts";
 import { excelRender } from "../../engines/excel/index.ts";
+import { tabularMap } from "../../engines/tabular/index.ts";
 import { HttpFetchProvider } from "../../core/fetch.ts";
 import { runJob, dueJobs } from "../../core/runner.ts";
 import { SchedulePolicy, type ScheduledJob } from "../../core/scheduler.ts";
@@ -18,7 +19,9 @@ const WORKSPACE = process.env.INVOKER_HOME ?? join(homedir(), ".invoker");
 
 // Built-in engines register here. Domain capabilities arrive via plugins (ADR-001/008).
 function bootstrap(): void {
-  if (!registry.has(excelRender.id, excelRender.contractVersion)) registry.register(excelRender);
+  for (const cap of [tabularMap, excelRender]) {
+    if (!registry.has(cap.id, cap.contractVersion)) registry.register(cap);
+  }
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -92,10 +95,7 @@ async function cmdInvoke(args: string[]): Promise<number> {
       console.log(`status    ${result.cacheHit ? "HIT" : "MISS"}`);
       console.log(`artifact  unknown (skipped)`);
     } else {
-      const a = result.artifact!;
-      console.log(`${result.cacheHit ? "cache hit" : "rendered"} in ${result.durationMs}ms`);
-      console.log(`path      ${a.path}`);
-      console.log(`sha256    ${a.artifactSha256}`);
+      reportResult(result);
     }
     return 0;
   } finally {
@@ -133,11 +133,16 @@ async function cmdCapability(args: string[]): Promise<number> {
     console.log(`determinism  ⚠ claimed but no sample() to verify`);
   } else {
     const data = cap.sample();
-    const r = await assertDeterministic(
-      async () =>
-        (await cap.execute({ request: { id: "verify", capability: cap.id, contractVersion: cap.contractVersion, params: {}, data }, data })).bytes,
-      10,
-    );
+    const r = await assertDeterministic(async () => {
+      const out = await cap.execute({
+        request: { id: "verify", capability: cap.id, contractVersion: cap.contractVersion, params: {}, data },
+        data,
+      });
+      if (out.kind !== "artifact") {
+        throw new Error("determinism self-test requires an artifact-producing capability");
+      }
+      return out.bytes;
+    }, 10);
     ok = r.ok;
     console.log(
       r.ok
@@ -234,11 +239,19 @@ function makeFetcher(): HttpFetchProvider {
   return new HttpFetchProvider({ tokenRef: process.env.INVOKER_TOKEN_REF });
 }
 
-function reportResult(result: { dryRun: boolean; cacheHit: boolean; durationMs: number; artifact?: { path: string; artifactSha256: string } }): void {
-  const a = result.artifact!;
-  console.log(`${result.cacheHit ? "cache hit" : "rendered"} in ${result.durationMs}ms`);
-  console.log(`path      ${a.path}`);
-  console.log(`sha256    ${a.artifactSha256}`);
+function reportResult(result: {
+  cacheHit: boolean;
+  durationMs: number;
+  artifact?: { path: string; artifactSha256: string };
+  data?: Record<string, unknown>;
+}): void {
+  if (result.artifact) {
+    console.log(`${result.cacheHit ? "cache hit" : "rendered"} in ${result.durationMs}ms`);
+    console.log(`path      ${result.artifact.path}`);
+    console.log(`sha256    ${result.artifact.artifactSha256}`);
+  } else {
+    console.log(`transformed in ${result.durationMs}ms (data output, no artifact)`);
+  }
 }
 
 function required(args: string[], flag: string): string {

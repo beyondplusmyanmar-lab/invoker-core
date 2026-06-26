@@ -1,27 +1,17 @@
 import ExcelJS from "exceljs";
 import { unzipSync, zipSync } from "fflate";
-import type { Capability, InvokeContext, RenderOutput } from "../../abi/index.ts";
+import type { ArtifactOutput, Capability, Column, InvokeContext, TableModel } from "../../abi/index.ts";
 
-export const ENGINE_VERSION = "1.0.0";
+export const ENGINE_VERSION = "1.1.0";
 const MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 /**
- * Generic tabular input. The engine knows NOTHING about DOEH or "reports" (ADR-001) —
- * it renders whatever columns/rows it is handed.
- */
-export interface SheetData {
-  sheet?: string;
-  columns: string[];
-  rows: (string | number | boolean | null)[][];
-}
-
-/**
- * Render an .xlsx deterministically (ADR-007). Two sources of nondeterminism are
- * neutralized: (1) workbook created/modified dates are pinned; (2) the resulting ZIP
- * is re-emitted with sorted entries and zeroed mtimes via fflate.
+ * Render an .xlsx deterministically (ADR-007) from a presentation-neutral TableModel.
+ * Two sources of nondeterminism are neutralized: (1) workbook created/modified dates are
+ * pinned; (2) the resulting ZIP is re-emitted with sorted entries and a fixed mtime.
  */
 export async function renderWorkbook(input: unknown): Promise<Uint8Array> {
-  const data = asSheetData(input);
+  const table = asTableModel(input);
 
   const wb = new ExcelJS.Workbook();
   // Pin all metadata timestamps so docProps/core.xml is byte-stable.
@@ -31,9 +21,9 @@ export async function renderWorkbook(input: unknown): Promise<Uint8Array> {
   wb.lastModifiedBy = "invoker";
   wb.creator = "invoker";
 
-  const ws = wb.addWorksheet(data.sheet ?? "Sheet1");
-  ws.addRow(data.columns);
-  for (const row of data.rows) ws.addRow(row);
+  const ws = wb.addWorksheet(table.sheet ?? "Sheet1");
+  ws.addRow(table.columns.map((c) => c.header));
+  for (const row of table.rows) ws.addRow(row as ExcelJS.CellValue[]);
 
   const raw = new Uint8Array(await wb.xlsx.writeBuffer());
   return normalizeZip(raw);
@@ -53,13 +43,18 @@ function normalizeZip(bytes: Uint8Array): Uint8Array {
   return zipSync(sorted, { mtime: FIXED_MTIME });
 }
 
-function asSheetData(input: unknown): SheetData {
+function asTableModel(input: unknown): TableModel {
   const o = (input ?? {}) as Record<string, unknown>;
   if (!Array.isArray(o.columns) || !Array.isArray(o.rows)) {
-    throw new Error("excel.render expects { columns: string[], rows: any[][], sheet?: string }");
+    throw new Error("excel.render expects a TableModel { columns: Column[], rows: any[][], sheet?: string }");
   }
-  return o as unknown as SheetData;
+  return o as unknown as TableModel;
 }
+
+const SAMPLE_COLUMNS: Column[] = [
+  { id: "a", header: "A" },
+  { id: "b", header: "B", type: "number" },
+];
 
 export const excelRender: Capability = {
   id: "excel.render",
@@ -68,9 +63,9 @@ export const excelRender: Capability = {
   deterministic: true,
   supportsDryRun: true,
   cacheable: true,
-  async execute(ctx: InvokeContext): Promise<RenderOutput> {
+  async execute(ctx: InvokeContext): Promise<ArtifactOutput> {
     const bytes = await renderWorkbook(ctx.data);
-    return { bytes, type: "xlsx", mime: MIME_XLSX };
+    return { kind: "artifact", bytes, type: "xlsx", mime: MIME_XLSX };
   },
-  sample: () => ({ sheet: "Sample", columns: ["A", "B"], rows: [["x", 1], ["y", 2]] }),
+  sample: () => ({ sheet: "Sample", columns: SAMPLE_COLUMNS, rows: [["x", 1], ["y", 2]] }),
 };

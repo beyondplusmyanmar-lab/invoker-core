@@ -4,7 +4,12 @@ export type {
   Capability,
   InvokeRequest,
   InvokeContext,
-  RenderOutput,
+  CapabilityOutput,
+  ArtifactOutput,
+  DataOutput,
+  ColumnType,
+  Column,
+  TableModel,
 } from "./capability.ts";
 
 export type { Artifact, InvokeResult } from "./artifact.ts";

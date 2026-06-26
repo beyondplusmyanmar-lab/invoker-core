@@ -17,12 +17,25 @@ export interface CapabilityDescriptor {
 
 /** A registered, executable capability. */
 export interface Capability extends CapabilityDescriptor {
-  execute(ctx: InvokeContext): Promise<RenderOutput>;
+  execute(ctx: InvokeContext): Promise<CapabilityOutput>;
   /**
    * Optional representative input used by `invoker capability verify` to self-check the
    * determinism claim. Domain-agnostic — the engine's own minimal sample, not real data.
    */
   sample?: () => Record<string, unknown>;
+}
+
+/** Presentation-neutral tabular model. The shared currency between map and render. */
+export type ColumnType = "string" | "number" | "date" | "currency";
+export interface Column {
+  id: string;
+  header: string;
+  type?: ColumnType;
+}
+export interface TableModel {
+  columns: Column[];
+  rows: unknown[][];
+  sheet?: string;
 }
 
 /** A single unit of work. Built by a transport, never holds business logic. */
@@ -42,12 +55,26 @@ export interface InvokeRequest {
   dryRun?: boolean;
 }
 
-/** What an engine returns: raw bytes + type metadata. The core hashes/persists it. */
-export interface RenderOutput {
+/**
+ * A capability either produces an artifact (bytes the core hashes/persists) or transforms
+ * data (a structured value fed forward to the next pipeline step). The discriminant lets
+ * one invoke() path serve render engines and data-shaping capabilities alike.
+ */
+export type CapabilityOutput = ArtifactOutput | DataOutput;
+
+/** Terminal output: raw bytes + type metadata. The core hashes and persists it. */
+export interface ArtifactOutput {
+  kind: "artifact";
   bytes: Uint8Array;
   /** Short type tag, e.g. "xlsx". */
   type: string;
   mime: string;
+}
+
+/** Intermediate output: a structured value (e.g. a TableModel) fed to the next step. */
+export interface DataOutput {
+  kind: "data";
+  value: Record<string, unknown>;
 }
 
 export interface InvokeContext {

@@ -12,7 +12,14 @@ import type { FetchProvider } from "../src/providers/index.ts";
 // A fake fetcher: returns generic sheet data, never touches the network.
 const fakeFetcher: FetchProvider = {
   async fetchJson() {
-    return { sheet: "Sales", columns: ["Item", "Qty"], rows: [["Tea", 10], ["Coffee", 5]] };
+    return {
+      sheet: "Sales",
+      columns: [
+        { id: "item", header: "Item" },
+        { id: "qty", header: "Qty", type: "number" },
+      ],
+      rows: [["Tea", 10], ["Coffee", 5]],
+    };
   },
 };
 

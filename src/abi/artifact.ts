@@ -19,8 +19,10 @@ export interface Artifact {
 }
 
 export interface InvokeResult {
-  /** Present on a real render or cache hit; omitted on dry-run. */
+  /** Present when the capability produced an artifact (render) or on a cache hit. */
   artifact?: Artifact;
+  /** Present when the capability produced data (a transform step, e.g. tabular.map). */
+  data?: Record<string, unknown>;
   cacheKey: string;
   cacheHit: boolean;
   durationMs: number;

@@ -15,7 +15,8 @@ export function computeCacheKey(req: InvokeRequest, engineVersion: string): stri
       `e${engineVersion}`,
       `t${req.template ?? ""}`,
       `tv${req.templateVersion ?? ""}`,
-      `d${jsonHash(req.data ?? req.params)}`,
+      // Both params (config, e.g. a mapping) and data (facts) shape the output.
+      `i${jsonHash({ params: req.params, data: req.data ?? null })}`,
     ].join("|"),
   );
 }
@@ -42,6 +43,12 @@ export async function invoke(req: InvokeRequest, store: Store): Promise<InvokeRe
   }
 
   const out = await cap.execute({ request: req, data: req.data ?? {} });
+
+  // Transform capability: structured value fed forward, no artifact persisted.
+  if (out.kind === "data") {
+    return { data: out.value, cacheKey, cacheHit: false, durationMs: elapsed(started), dryRun: false };
+  }
+
   const artifactSha256 = sha256Hex(out.bytes);
   const path = store.artifactPath(req.id, out.type);
   await Bun.write(path, out.bytes);
