@@ -72,4 +72,5 @@ export const excelRender: Capability = {
     const bytes = await renderWorkbook(ctx.data);
     return { bytes, type: "xlsx", mime: MIME_XLSX };
   },
+  sample: () => ({ sheet: "Sample", columns: ["A", "B"], rows: [["x", 1], ["y", 2]] }),
 };

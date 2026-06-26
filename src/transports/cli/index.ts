@@ -12,6 +12,7 @@ import { excelRender } from "../../engines/excel/index.ts";
 import { HttpFetchProvider } from "../../core/fetch.ts";
 import { runJob, dueJobs } from "../../core/runner.ts";
 import { SchedulePolicy, type ScheduledJob } from "../../core/scheduler.ts";
+import { assertDeterministic } from "../../engines/conformance.ts";
 
 const WORKSPACE = process.env.INVOKER_HOME ?? join(homedir(), ".invoker");
 
@@ -31,6 +32,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdInvoke(rest);
     case "capabilities":
       return cmdCapabilities();
+    case "capability":
+      return cmdCapability(rest);
     case "jobs":
       return cmdJobs(rest);
     case "run":
@@ -98,6 +101,51 @@ async function cmdInvoke(args: string[]): Promise<number> {
   } finally {
     store.close();
   }
+}
+
+/** invoker capability <list | verify <id[@vN]>> — descriptor checklist + live determinism self-test. */
+async function cmdCapability(args: string[]): Promise<number> {
+  const sub = args[0];
+  if (sub === "list" || sub === undefined) return cmdCapabilities();
+  if (sub !== "verify") {
+    console.error("usage: invoker capability <list|verify <id[@vN]>>");
+    return 1;
+  }
+
+  const idArg = args[1];
+  if (!idArg) {
+    console.error("usage: invoker capability verify <id[@vN]>");
+    return 1;
+  }
+  const [id, vtag] = idArg.split("@v");
+  const cap = registry.resolve(id!, vtag ? Number(vtag) : 1);
+
+  const mark = (b: boolean) => (b ? "✓" : "✗");
+  console.log(`capability   ${cap.id}@v${cap.contractVersion}`);
+  console.log(`engine       ${cap.engineVersion}`);
+  console.log(`dry-run      ${mark(cap.supportsDryRun)}`);
+  console.log(`cacheable    ${mark(cap.cacheable)}`);
+
+  let ok = true;
+  if (!cap.deterministic) {
+    console.log(`determinism  n/a (not claimed)`);
+  } else if (!cap.sample) {
+    console.log(`determinism  ⚠ claimed but no sample() to verify`);
+  } else {
+    const data = cap.sample();
+    const r = await assertDeterministic(
+      async () =>
+        (await cap.execute({ request: { id: "verify", capability: cap.id, contractVersion: cap.contractVersion, params: {}, data }, data })).bytes,
+      10,
+    );
+    ok = r.ok;
+    console.log(
+      r.ok
+        ? `determinism  ✓ verified ×10 (${r.hash!.slice(0, 12)}…)`
+        : `determinism  ✗ FAILED — ${new Set(r.hashes).size} distinct hashes across 10 renders`,
+    );
+  }
+  return ok ? 0 : 1;
 }
 
 /** invoker jobs add --id <id> --name <n> --cap <c> --cron "<expr>" [--source url] [--template t] [--policy catchup|skip|resume] [--max-lag ms] */
@@ -210,7 +258,8 @@ function usage(code = 0): number {
       "invoker — a deterministic capability runtime for artifact-producing workloads",
       "",
       "  invoker init                                  create the local workspace",
-      "  invoker capabilities                          list registered capabilities",
+      "  invoker capability list                       list registered capabilities",
+      "  invoker capability verify <id[@vN]>           descriptor checklist + ×10 determinism self-test",
       "  invoker invoke <cap> --data f.json [--dry-run]  run one capability",
       "",
       "  invoker jobs add --id <id> --cap <c> --cron \"<expr>\" [--source url] [--template t] [--policy catchup|skip|resume]",

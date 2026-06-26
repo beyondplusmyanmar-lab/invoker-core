@@ -18,6 +18,11 @@ export interface CapabilityDescriptor {
 /** A registered, executable capability. */
 export interface Capability extends CapabilityDescriptor {
   execute(ctx: InvokeContext): Promise<RenderOutput>;
+  /**
+   * Optional representative input used by `invoker capability verify` to self-check the
+   * determinism claim. Domain-agnostic — the engine's own minimal sample, not real data.
+   */
+  sample?: () => Record<string, unknown>;
 }
 
 /** A single unit of work. Built by a transport, never holds business logic. */

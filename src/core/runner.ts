@@ -73,16 +73,36 @@ function mustFetch(fetcher: FetchProvider | undefined, source: string) {
   return fetcher.fetchJson(source);
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /**
- * Filter to jobs whose most recent cron tick is due under their missed-run policy.
- * croner computes `previousRun()` relative to the real current time, so `now` defaults
- * to Date.now() to keep the lag math consistent.
+ * The most recent scheduled tick at or before `now`, searched forward from a lower bound.
+ *
+ * croner's `previousRun()` is relative to an instance's own execution history (null for a
+ * fresh instance), so it can't answer "what was the last tick that should have fired?".
+ * We anchor the search at the last successful run when known, else a bounded lookback,
+ * and walk forward to the latest occurrence <= now.
  */
+export function previousTick(cron: Cron, lowerBoundMs: number, now: number): number | null {
+  let t = cron.nextRun(new Date(lowerBoundMs));
+  if (!t || t.getTime() > now) return null;
+  let last = t.getTime();
+  for (let i = 0; i < 100_000; i++) {
+    const next = cron.nextRun(new Date(last));
+    if (!next || next.getTime() > now) break;
+    last = next.getTime();
+  }
+  return last;
+}
+
+/** Filter to jobs whose most recent cron tick is due under their missed-run policy. */
 export function dueJobs(jobs: ScheduledJob[], store: Store, now = Date.now()): ScheduledJob[] {
   return jobs.filter((job) => {
-    const prev = new Cron(job.cron).previousRun();
-    const prevTick = prev ? prev.getTime() : null;
     const state = store.getSchedulerState(job.id);
+    // Anchor at the last run if known; otherwise look back a bounded window so a
+    // never-run job still sees a recently-elapsed tick (bounds the forward walk).
+    const lowerBound = state.lastRunAt ?? now - Math.max(job.maxLagMs, DAY_MS);
+    const prevTick = previousTick(new Cron(job.cron), lowerBound, now);
     return decideRun(job, prevTick, state, now).run;
   });
 }
