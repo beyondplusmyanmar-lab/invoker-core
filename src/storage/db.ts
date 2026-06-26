@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Artifact } from "../abi/index.ts";
 import type { SchedulePolicy, ScheduledJob, SchedulerState } from "../core/scheduler.ts";
+import type { PipelineStep } from "../core/pipeline.ts";
 
 export interface RunRecord {
   id: string;
@@ -80,8 +81,8 @@ export class Store {
     this.db
       .query(
         `INSERT OR REPLACE INTO jobs
-         (id, name, capability, contract_version, source, template, cron, policy, max_lag_ms, enabled)
-         VALUES ($id, $name, $cap, $cv, $source, $template, $cron, $policy, $lag, $enabled)`,
+         (id, name, capability, contract_version, source, template, steps, cron, policy, max_lag_ms, enabled)
+         VALUES ($id, $name, $cap, $cv, $source, $template, $steps, $cron, $policy, $lag, $enabled)`,
       )
       .run({
         $id: j.id,
@@ -90,7 +91,8 @@ export class Store {
         $cv: j.contractVersion,
         $source: j.source ?? null,
         $template: j.template ?? null,
-        $cron: j.cron,
+        $steps: j.steps && j.steps.length ? JSON.stringify(j.steps) : null,
+        $cron: j.cron || null,
         $policy: j.policy,
         $lag: j.maxLagMs,
         $enabled: j.enabled ? 1 : 0,
@@ -173,7 +175,8 @@ function rowToJob(r: Record<string, unknown>): ScheduledJob {
     contractVersion: Number(r.contract_version),
     source: r.source == null ? undefined : String(r.source),
     template: r.template == null ? undefined : String(r.template),
-    cron: String(r.cron),
+    steps: r.steps == null ? undefined : (JSON.parse(String(r.steps)) as PipelineStep[]),
+    cron: r.cron == null ? "" : String(r.cron),
     policy: String(r.policy) as SchedulePolicy,
     maxLagMs: Number(r.max_lag_ms),
     enabled: Number(r.enabled) === 1,

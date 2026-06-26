@@ -4,12 +4,13 @@ import type { FetchProvider } from "../providers/index.ts";
 import type { Store } from "../storage/db.ts";
 import type { InvokeResult } from "../abi/index.ts";
 import { invoke } from "./invoke.ts";
+import { runPipeline } from "./pipeline.ts";
 import { decideRun, type ScheduledJob } from "./scheduler.ts";
 
 /**
- * Run one job now: fetch (if it declares a source) → invoke → persist run + scheduler_state.
- * This is the scheduler transport's unit of work; it adds orchestration around invoke(),
- * never render or business logic.
+ * Run one job now: fetch (if it declares a source) → invoke OR runPipeline → persist run +
+ * scheduler_state. This is the scheduler transport's unit of work; it adds orchestration
+ * around invoke()/runPipeline, never render or business logic.
  */
 export async function runJob(
   job: ScheduledJob,
@@ -29,17 +30,20 @@ export async function runJob(
 
   try {
     const data = job.source ? await mustFetch(fetcher, job.source) : {};
-    const result = await invoke(
-      {
-        id: runId,
-        capability: job.capability,
-        contractVersion: job.contractVersion,
-        params: {},
-        template: job.template,
-        data,
-      },
-      store,
-    );
+    const result =
+      job.steps && job.steps.length > 0
+        ? await runPipeline(job.steps, data, store)
+        : await invoke(
+            {
+              id: runId,
+              capability: job.capability,
+              contractVersion: job.contractVersion,
+              params: {},
+              template: job.template,
+              data,
+            },
+            store,
+          );
     store.recordRun({
       id: runId,
       jobId: job.id,
@@ -98,6 +102,7 @@ export function previousTick(cron: Cron, lowerBoundMs: number, now: number): num
 /** Filter to jobs whose most recent cron tick is due under their missed-run policy. */
 export function dueJobs(jobs: ScheduledJob[], store: Store, now = Date.now()): ScheduledJob[] {
   return jobs.filter((job) => {
+    if (!job.cron) return false; // unscheduled (manual `invoker run` only)
     const state = store.getSchedulerState(job.id);
     // Anchor at the last run if known; otherwise look back a bounded window so a
     // never-run job still sees a recently-elapsed tick (bounds the forward walk).

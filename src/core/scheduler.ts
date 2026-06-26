@@ -1,6 +1,8 @@
 // Missed-run handling for a scheduler that runs on a machine which is often asleep/off.
 // The interesting logic is the policy decision; cron parsing is delegated to `croner`.
 
+import type { PipelineStep } from "./pipeline.ts";
+
 export enum SchedulePolicy {
   /** Run missed ticks on wake, bounded by maxLag. Recommended for reports. */
   CatchUp = "catchup",
@@ -15,9 +17,15 @@ export interface ScheduledJob {
   name: string;
   capability: string;
   contractVersion: number;
-  /** Optional JSON fetch ref. If set, the runner fetches it and feeds it as invoke data. */
+  /** Optional JSON fetch ref (http(s):// or file:). Fetched and fed as the (first) invoke data. */
   source?: string;
   template?: string;
+  /**
+   * Optional pipeline. When present the runner runs these steps via runPipeline (e.g.
+   * tabular.map → excel.render); otherwise it does a single invoke of `capability`.
+   */
+  steps?: PipelineStep[];
+  /** Empty string = unscheduled (manual `invoker run` only); never fires on a tick. */
   cron: string;
   policy: SchedulePolicy;
   maxLagMs: number;
