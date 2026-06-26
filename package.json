@@ -4,6 +4,9 @@
   "description": "A deterministic capability runtime for artifact-producing workloads.",
   "type": "module",
   "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "bin": {
     "invoker": "./src/transports/cli/index.ts"
   },
