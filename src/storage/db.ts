@@ -160,9 +160,77 @@ export class Store {
       });
   }
 
+  // --- daemon heartbeat (P2) ----------------------------------------------
+
+  setDaemonHeartbeat(hb: DaemonHeartbeat): void {
+    this.db
+      .query(
+        `INSERT OR REPLACE INTO daemon_state (id, pid, started_at, last_tick_at, ticks, status)
+         VALUES (1, $pid, $startedAt, $lastTickAt, $ticks, $status)`,
+      )
+      .run({
+        $pid: hb.pid,
+        $startedAt: hb.startedAt,
+        $lastTickAt: hb.lastTickAt ?? null,
+        $ticks: hb.ticks,
+        $status: hb.status,
+      });
+  }
+
+  getDaemonHeartbeat(): DaemonHeartbeat | undefined {
+    const row = this.db.query("SELECT * FROM daemon_state WHERE id = 1").get() as
+      | Record<string, unknown>
+      | null;
+    if (!row) return undefined;
+    return {
+      pid: Number(row.pid),
+      startedAt: Number(row.started_at),
+      lastTickAt: row.last_tick_at == null ? undefined : Number(row.last_tick_at),
+      ticks: Number(row.ticks),
+      status: String(row.status) as DaemonHeartbeat["status"],
+    };
+  }
+
+  // --- plugins (read-only view for doctor, ADR-008) ------------------------
+
+  listPlugins(): PluginSummary[] {
+    const rows = this.db
+      .query("SELECT name, version, enabled, verified FROM plugins ORDER BY name")
+      .all() as Record<string, unknown>[];
+    return rows.map((r) => ({
+      name: String(r.name),
+      version: String(r.version),
+      enabled: Number(r.enabled) === 1,
+      verified: Number(r.verified),
+    }));
+  }
+
+  countArtifacts(): number {
+    const row = this.db.query("SELECT COUNT(*) AS n FROM artifacts").get() as { n: number };
+    return Number(row.n);
+  }
+
   close(): void {
     this.db.close();
   }
+}
+
+/** Single-row daemon liveness record (P2). The lockfile owns exclusion; this owns visibility. */
+export interface DaemonHeartbeat {
+  pid: number;
+  startedAt: number;
+  lastTickAt?: number;
+  ticks: number;
+  status: "running" | "stopped";
+}
+
+/** A trust-tiered plugin row, summarised for `invoker doctor` (ADR-008). */
+export interface PluginSummary {
+  name: string;
+  version: string;
+  enabled: boolean;
+  /** 0 unverified · 1 verified · 2 trusted · 3 required. */
+  verified: number;
 }
 
 function rowToJob(r: Record<string, unknown>): ScheduledJob {
