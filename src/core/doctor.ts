@@ -21,8 +21,12 @@ export interface DoctorCheck {
 
 export interface DoctorReport {
   checks: DoctorCheck[];
-  /** True when no check failed (warnings are tolerated). Drives the CLI exit code. */
+  /**
+   * Drives the CLI exit code. Lenient (default): true unless a check FAILED — warnings are
+   * tolerated. Strict: true only when every check is OK — warnings count as failures too.
+   */
   ok: boolean;
+  strict: boolean;
 }
 
 export interface DoctorDeps {
@@ -33,6 +37,8 @@ export interface DoctorDeps {
   tokenRef?: string;
   /** Bun.version, when running under Bun. */
   bunVersion?: string;
+  /** When true, warnings count as failures (e.g. a CI/onboarding gate). */
+  strict?: boolean;
   now?: number;
 }
 
@@ -150,7 +156,11 @@ export async function runDoctor(deps: DoctorDeps): Promise<DoctorReport> {
   // relay (P3) — not built yet ----------------------------------------------
   add("relay", "warn", "not configured (WS relay is P3, not yet built)");
 
-  return { checks, ok: checks.every((c) => c.status !== "fail") };
+  const strict = deps.strict ?? false;
+  const ok = strict
+    ? checks.every((c) => c.status === "ok")
+    : checks.every((c) => c.status !== "fail");
+  return { checks, ok, strict };
 }
 
 /** a >= b for dotted numeric versions (major.minor.patch). Non-numeric segments compare as 0. */

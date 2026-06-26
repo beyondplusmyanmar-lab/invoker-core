@@ -59,7 +59,7 @@ async function main(argv: string[]): Promise<number> {
     case "daemon":
       return cmdDaemon(rest);
     case "doctor":
-      return cmdDoctor();
+      return cmdDoctor(rest);
     case undefined:
     case "help":
     case "--help":
@@ -376,8 +376,9 @@ function daemonStatus(): number {
   }
 }
 
-/** invoker doctor — read-only health sweep (P4). Exit 1 if any check FAILS (warnings tolerated). */
-async function cmdDoctor(): Promise<number> {
+/** invoker doctor [--strict] — read-only health sweep (P4). Exit 1 on FAIL; --strict also fails warnings. */
+async function cmdDoctor(args: string[]): Promise<number> {
+  const strict = args.includes("--strict");
   const store = new Store(WORKSPACE);
   try {
     const report = await runDoctor({
@@ -386,10 +387,17 @@ async function cmdDoctor(): Promise<number> {
       registry,
       tokenRef: process.env.INVOKER_TOKEN_REF,
       bunVersion: typeof Bun !== "undefined" ? Bun.version : undefined,
+      strict,
     });
     const mark = (s: string) => (s === "ok" ? "✓" : s === "warn" ? "⚠" : "✗");
     for (const c of report.checks) {
       console.log(`${mark(c.status)} ${c.name.padEnd(13)} ${c.detail}`);
+    }
+    if (!report.ok) {
+      const bad = report.checks.filter((c) =>
+        strict ? c.status !== "ok" : c.status === "fail",
+      );
+      console.log(`\n${strict ? "strict " : ""}check failed: ${bad.map((c) => c.name).join(", ")}`);
     }
     return report.ok ? 0 : 1;
   } finally {
@@ -444,7 +452,7 @@ function usage(code = 0): number {
       "  invoker tick                                  run every job due under its policy (one-shot)",
       "",
       "  invoker daemon <run|start|stop|status>        persistent scheduler (tick loop)",
-      "  invoker doctor                                read-only health sweep",
+      "  invoker doctor [--strict]                     read-only health sweep (--strict: warnings fail)",
       "",
       "  (mcp, ws, tauri transports: see ARCHITECTURE.md roadmap)",
     ].join("\n"),

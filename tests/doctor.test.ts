@@ -44,6 +44,19 @@ test("healthy workspace: determinism ✓, relay ⚠, no failures", async () => {
   });
 });
 
+test("--strict escalates warnings (relay, secrets) to failure", async () => {
+  await withStore(async (store, dir) => {
+    const lenient = await runDoctor({ workspace: dir, store, registry, bunVersion: "1.2.0" });
+    expect(lenient.ok).toBe(true); // warnings tolerated
+
+    const strict = await runDoctor({ workspace: dir, store, registry, bunVersion: "1.2.0", strict: true });
+    expect(strict.strict).toBe(true);
+    expect(strict.ok).toBe(false); // relay + secrets warnings now fail
+    // individual check statuses are unchanged; only the verdict tightens
+    expect(find(strict, "relay").status).toBe("warn");
+  });
+});
+
 test("inline secret is an ADR-005 failure", async () => {
   await withStore(async (store, dir) => {
     const r = await runDoctor({ workspace: dir, store, registry, tokenRef: "sk_live_abc123" });
