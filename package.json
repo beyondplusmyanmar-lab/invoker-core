@@ -1,0 +1,27 @@
+{
+  "name": "@beyondplusmm/invoker-core",
+  "version": "0.0.0",
+  "description": "A deterministic capability runtime for artifact-producing workloads.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "invoker": "./src/transports/cli/index.ts"
+  },
+  "scripts": {
+    "invoker": "bun run ./src/transports/cli/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "fflate": "^0.8.2",
+    "croner": "^8.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  }
+}

@@ -1,0 +1,12 @@
+node_modules/
+bun.lockb
+*.log
+
+# local workspace state (never committed; per-user, may contain artifacts)
+.workspace/
+*.sqlite
+*.sqlite-*
+
+# resolved secrets must never land in the tree
+*.key
+secrets.local.*
