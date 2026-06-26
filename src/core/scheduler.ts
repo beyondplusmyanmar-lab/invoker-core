@@ -15,6 +15,8 @@ export interface ScheduledJob {
   name: string;
   capability: string;
   contractVersion: number;
+  /** Optional JSON fetch ref. If set, the runner fetches it and feeds it as invoke data. */
+  source?: string;
   template?: string;
   cron: string;
   policy: SchedulePolicy;
