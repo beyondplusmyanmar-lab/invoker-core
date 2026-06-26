@@ -2,15 +2,23 @@ import ExcelJS from "exceljs";
 import { unzipSync, zipSync } from "fflate";
 import type { ArtifactOutput, Capability, Column, InvokeContext, TableModel } from "../../abi/index.ts";
 
-export const ENGINE_VERSION = "1.1.0";
+export const ENGINE_VERSION = "1.2.0";
 const MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 /**
  * Render an .xlsx deterministically (ADR-007) from a presentation-neutral TableModel.
- * Two sources of nondeterminism are neutralized: (1) workbook created/modified dates are
- * pinned; (2) the resulting ZIP is re-emitted with sorted entries and a fixed mtime.
+ * Three sources of nondeterminism are neutralized: (1) the runtime timezone is pinned to UTC;
+ * (2) workbook created/modified dates are pinned; (3) the resulting ZIP is re-emitted with
+ * sorted entries and a fixed mtime.
+ *
+ * Timezone pin (ADR-007): fflate encodes the zip mtime and exceljs serializes date cells using
+ * the process's LOCAL time. Without this, a UTC host, a +8 host, and a -8 host each produce a
+ * DIFFERENT artifact for identical input — and a -8 host CRASHES, because the 1980 zip epoch
+ * underflows to 1979 (outside fflate's 1980–2099 range). Determinism is defined relative to a
+ * pinned timezone; the runtime is UTC.
  */
 export async function renderWorkbook(input: unknown): Promise<Uint8Array> {
+  if (process.env.TZ !== "UTC") process.env.TZ = "UTC";
   const table = asTableModel(input);
 
   const wb = new ExcelJS.Workbook();
