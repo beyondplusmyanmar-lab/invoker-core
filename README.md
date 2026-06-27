@@ -6,12 +6,39 @@
 on a schedule or on demand. The intelligence — planning, deciding, summarizing — lives
 elsewhere (your Business AI). `invoker` is the hands, not the brain.
 
+## Install & run
+
+From source ([Bun](https://bun.sh) required):
+
 ```sh
-curl -fsSL https://invoker.sh/install | bash
+git clone git@github.com:beyondplusmyanmar-lab/invoker-core.git
+cd invoker-core && bun install
+bun link                       # exposes the `invoker` command
+                               # (or run directly: bun run src/transports/cli/index.ts …)
 invoker init
-invoker plugin install doeh          # domain knowledge arrives as a plugin
-invoker schedule                     # run jobs unattended
+invoker doctor                 # operability sweep
+invoker daemon start           # run scheduled jobs unattended
 ```
+
+### Standalone binary
+
+Compile one self-contained file. It embeds the runtime **and** the schema, so
+**Bun is not required on the target machine** — copy the single binary and run it:
+
+```sh
+bun build ./src/transports/cli/index.ts --compile --outfile invoker
+./invoker init && ./invoker doctor
+```
+
+Cross-build for another machine, then copy the file over:
+
+```sh
+bun build ./src/transports/cli/index.ts --compile \
+  --target=bun-darwin-arm64 --outfile invoker      # the pilot laptop
+```
+
+Targets: `bun-darwin-arm64` · `bun-darwin-x64` · `bun-linux-x64` ·
+`bun-windows-x64`. (A hosted one-line installer is planned, not yet available.)
 
 ## What it is
 
