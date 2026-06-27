@@ -67,3 +67,16 @@ test("Resume: a stale missed tick still runs once on next launch", () => {
     expect(dueJobs([j], store).map((x) => x.id)).toContain("wake");
   });
 });
+
+test("manual job (no cron) is skipped, not fed to croner", () => {
+  withStore((store) => {
+    // A `cron=manual` import persists a job with no cron expression. The daemon
+    // tick must skip it; `new Cron(null)` would otherwise throw and kill the loop.
+    // Not upserted: a null-cron row reaches the daemon only via a workspace DB
+    // written by a nullable-cron schema (p1a-wiring). The guard short-circuits
+    // before any store access, so passing the job directly exercises the path.
+    const j = job({ id: "manual", name: "manual", cron: null as unknown as string });
+    expect(() => dueJobs([j], store)).not.toThrow();
+    expect(dueJobs([j], store)).toHaveLength(0);
+  });
+});

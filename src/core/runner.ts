@@ -98,6 +98,7 @@ export function previousTick(cron: Cron, lowerBoundMs: number, now: number): num
 /** Filter to jobs whose most recent cron tick is due under their missed-run policy. */
 export function dueJobs(jobs: ScheduledJob[], store: Store, now = Date.now()): ScheduledJob[] {
   return jobs.filter((job) => {
+    if (!job.cron) return false; // unscheduled (manual `invoker run` only)
     const state = store.getSchedulerState(job.id);
     // Anchor at the last run if known; otherwise look back a bounded window so a
     // never-run job still sees a recently-elapsed tick (bounds the forward walk).
