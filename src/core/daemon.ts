@@ -14,6 +14,8 @@ import { join } from "node:path";
 import type { FetchProvider } from "../providers/index.ts";
 import type { Store } from "../storage/db.ts";
 import { runJob, dueJobs } from "./runner.ts";
+import type { ExecutionCoordinator } from "./execution.ts";
+import type { Limits } from "./limits.ts";
 
 export const DEFAULT_INTERVAL_MS = 60_000;
 
@@ -95,7 +97,7 @@ export interface TickResult {
  */
 export async function tickOnce(
   store: Store,
-  opts: { fetcher?: FetchProvider; now?: number } = {},
+  opts: { fetcher?: FetchProvider; now?: number; coordinator?: ExecutionCoordinator; limits?: Limits } = {},
 ): Promise<TickResult> {
   const at = opts.now ?? Date.now();
   const due = dueJobs(store.listJobs(), store, at);
@@ -103,7 +105,7 @@ export async function tickOnce(
   let failed = 0;
   for (const job of due) {
     try {
-      await runJob(job, store, opts.fetcher);
+      await runJob(job, store, opts.fetcher, { coordinator: opts.coordinator, limits: opts.limits });
       ran++;
     } catch {
       failed++; // failure is persisted inside runJob; swallow here to keep the daemon alive
@@ -135,6 +137,9 @@ export interface DaemonLoopOptions {
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   onTick?: (r: TickResult) => void;
+  /** Shared across ticks so concurrent same-report triggers collapse onto one render (E1). */
+  coordinator?: ExecutionCoordinator;
+  limits?: Limits;
   pid?: number;
 }
 
@@ -156,7 +161,12 @@ export async function runDaemonLoop(store: Store, opts: DaemonLoopOptions = {}):
   store.setDaemonHeartbeat({ pid, startedAt, ticks, status: "running" });
 
   while (!signal?.aborted) {
-    const r = await tickOnce(store, { fetcher: opts.fetcher, now: now() });
+    const r = await tickOnce(store, {
+      fetcher: opts.fetcher,
+      now: now(),
+      coordinator: opts.coordinator,
+      limits: opts.limits,
+    });
     ticks++;
     lastTickAt = r.at;
     store.setDaemonHeartbeat({ pid, startedAt, lastTickAt, ticks, status: "running" });

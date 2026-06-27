@@ -6,6 +6,41 @@ import type { InvokeResult } from "../abi/index.ts";
 import { invoke } from "./invoke.ts";
 import { runPipeline } from "./pipeline.ts";
 import { decideRun, type ScheduledJob } from "./scheduler.ts";
+import { sha256Hex, jsonHash } from "./hash.ts";
+import { enforceInputLimits, DEFAULT_LIMITS, type Limits } from "./limits.ts";
+import type { ExecutionCoordinator } from "./execution.ts";
+
+/** Runtime protections threaded into a job run (E1). Both optional and backward-compatible. */
+export interface RunJobOptions {
+  /** Collapses concurrent identical runs onto one render; bounds concurrency + duration. */
+  coordinator?: ExecutionCoordinator;
+  /** Input ceilings enforced at the data boundary. Defaults to DEFAULT_LIMITS. */
+  limits?: Limits;
+}
+
+/**
+ * The coordinator key: identifies "this job with this input". Two producers asking for the same
+ * report with the same fetched data collapse onto one render. Distinct from invoke()'s cacheKey
+ * (which is per-capability and per-step); this is per whole-job, so it covers pipelines too.
+ */
+export function logicalRequestHash(job: ScheduledJob, data: unknown): string {
+  return sha256Hex(
+    [
+      job.id,
+      job.capability,
+      `c${job.contractVersion}`,
+      `t${job.template ?? ""}`,
+      job.steps?.length ? `s${jsonHash(job.steps)}` : "",
+      `d${jsonHash(data ?? null)}`,
+    ].join("|"),
+  );
+}
+
+/** Prefer a capability/runtime error's stable UPPER_SNAKE `code`; fall back to its message. */
+function errorCode(err: unknown): string {
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : (err as Error).message;
+}
 
 /**
  * Run one job now: fetch (if it declares a source) → invoke OR runPipeline → persist run +
@@ -16,6 +51,7 @@ export async function runJob(
   job: ScheduledJob,
   store: Store,
   fetcher?: FetchProvider,
+  opts: RunJobOptions = {},
 ): Promise<InvokeResult> {
   const runId = randomUUID();
   const startedAt = Date.now();
@@ -30,10 +66,14 @@ export async function runJob(
 
   try {
     const data = job.source ? await mustFetch(fetcher, job.source) : {};
-    const result =
+    enforceInputLimits(data, opts.limits ?? DEFAULT_LIMITS); // reject oversized input before any render
+
+    // The actual render. A pipeline's terminal artifact has its own id; a single-cap job binds the
+    // artifact to this run's id. The signal is best-effort (no worker isolation in v0.2).
+    const render = (): Promise<InvokeResult> =>
       job.steps && job.steps.length > 0
-        ? await runPipeline(job.steps, data, store)
-        : await invoke(
+        ? runPipeline(job.steps, data, store)
+        : invoke(
             {
               id: runId,
               capability: job.capability,
@@ -44,8 +84,20 @@ export async function runJob(
             },
             store,
           );
+
+    // With a coordinator, concurrent identical requests collapse onto one render; the rest attach.
+    let result: InvokeResult;
+    let leader = true;
+    if (opts.coordinator) {
+      const outcome = await opts.coordinator.run(logicalRequestHash(job, data), render);
+      result = outcome.result;
+      leader = outcome.leader;
+    } else {
+      result = await render();
+    }
+
     const finishedAt = Date.now();
-    const art = result.artifact; // a pipeline's terminal artifact has its own id; carry it on the run
+    const art = result.artifact;
     store.recordRun({
       id: runId,
       jobId: job.id,
@@ -60,9 +112,9 @@ export async function runJob(
       artifactType: art?.type,
       artifactSize: art?.size,
     });
-    if (art) {
-      // Self-describing sidecar: a report stays interpretable from the filesystem alone, even
-      // if the sqlite index is lost — consistent with Hands being artifact authority.
+    // Only the leader actually rendered, so only it writes the artifact's manifest sidecar; the
+    // attached waiters share that same artifact (and its existing manifest).
+    if (art && leader) {
       store.writeManifest(runId, {
         id: runId,
         job: job.name,
@@ -79,6 +131,7 @@ export async function runJob(
     store.setSchedulerState(job.id, { lastRunAt: startedAt, lastStatus: "completed" });
     return result;
   } catch (err) {
+    // Stable code (TIMED_OUT / EXECUTION_BUSY / INPUT_TOO_LARGE / …) lands in the run's error column.
     store.recordRun({
       id: runId,
       jobId: job.id,
@@ -87,7 +140,7 @@ export async function runJob(
       cacheHit: false,
       startedAt,
       finishedAt: Date.now(),
-      error: (err as Error).message,
+      error: errorCode(err),
     });
     store.setSchedulerState(job.id, { lastRunAt: startedAt, lastStatus: "failed" });
     throw err;

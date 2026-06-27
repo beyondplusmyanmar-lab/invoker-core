@@ -14,6 +14,8 @@ import { docxRender } from "../../engines/docx/index.ts";
 import { tabularMap } from "../../engines/tabular/index.ts";
 import { HttpFetchProvider, RoutingFetchProvider } from "../../core/fetch.ts";
 import { runJob, dueJobs, nextTick } from "../../core/runner.ts";
+import { ExecutionCoordinator, DEFAULT_MAX_PENDING } from "../../core/execution.ts";
+import { DEFAULT_LIMITS, type Limits } from "../../core/limits.ts";
 import { SchedulePolicy, type ScheduledJob } from "../../core/scheduler.ts";
 import { importJobSpec } from "../../core/jobspec.ts";
 import { runListener } from "../../core/notification-listener.ts";
@@ -288,7 +290,8 @@ async function cmdSchedule(args: string[]): Promise<number> {
           console.error(`no such schedule: ${id}`);
           return 1;
         }
-        reportResult(await runJob(job, store, makeFetcher()));
+        const limits = makeLimits();
+        reportResult(await runJob(job, store, makeFetcher(), { coordinator: makeCoordinator(limits), limits }));
         return 0;
       }
       case "edit":
@@ -385,7 +388,8 @@ async function cmdRun(args: string[]): Promise<number> {
       console.error(`no such job: ${jobId}`);
       return 1;
     }
-    const result = await runJob(job, store, makeFetcher());
+    const limits = makeLimits();
+    const result = await runJob(job, store, makeFetcher(), { coordinator: makeCoordinator(limits), limits });
     reportResult(result);
     return 0;
   } finally {
@@ -615,9 +619,11 @@ async function cmdTick(_args: string[]): Promise<number> {
       console.log("no jobs due");
       return 0;
     }
+    const limits = makeLimits();
+    const coordinator = makeCoordinator(limits);
     for (const job of due) {
       console.log(`running due job '${job.id}'…`);
-      const result = await runJob(job, store, makeFetcher());
+      const result = await runJob(job, store, makeFetcher(), { coordinator, limits });
       reportResult(result);
     }
     return 0;
@@ -656,6 +662,7 @@ async function daemonRun(): Promise<number> {
   process.on("SIGTERM", stop);
 
   const store = new Store(WORKSPACE);
+  const limits = makeLimits();
   console.log(
     `daemon running (pid ${process.pid}), interval ${DEFAULT_INTERVAL_MS}ms — Ctrl-C to stop`,
   );
@@ -663,6 +670,8 @@ async function daemonRun(): Promise<number> {
     await runDaemonLoop(store, {
       signal: controller.signal,
       fetcher: makeFetcher(),
+      coordinator: makeCoordinator(limits),
+      limits,
       onTick: (r) => {
         if (r.ran || r.failed) {
           console.log(`[${new Date(r.at).toISOString()}] tick: ran ${r.ran}, failed ${r.failed}`);
@@ -783,6 +792,23 @@ async function cmdDoctor(args: string[]): Promise<number> {
   }
 }
 
+/** Input ceilings from env, falling back to the v0.2 defaults (50k rows / 100MB / 5min). */
+function makeLimits(): Limits {
+  return {
+    maxRows: Number(process.env.INVOKER_MAX_ROWS ?? DEFAULT_LIMITS.maxRows),
+    maxBytes: Number(process.env.INVOKER_MAX_BYTES ?? DEFAULT_LIMITS.maxBytes),
+    maxDurationMs: Number(process.env.INVOKER_MAX_DURATION_MS ?? DEFAULT_LIMITS.maxDurationMs),
+  };
+}
+
+/** A coordinator wired to the configured concurrency cap + per-execution timeout. */
+function makeCoordinator(limits: Limits): ExecutionCoordinator {
+  return new ExecutionCoordinator({
+    maxPending: Number(process.env.INVOKER_MAX_PENDING ?? DEFAULT_MAX_PENDING),
+    maxDurationMs: limits.maxDurationMs,
+  });
+}
+
 function makeFetcher(): RoutingFetchProvider {
   // Token reference (env:/file:/keychain:/exec:) supplied out-of-band; never inline (ADR-005).
   // Routing handles file: sources locally (offline) and everything else over HTTP.
@@ -861,4 +887,12 @@ function usage(code = 0): number {
   return code;
 }
 
-process.exit(await main(process.argv.slice(2)));
+try {
+  process.exit(await main(process.argv.slice(2)));
+} catch (err) {
+  // A job/render threw (e.g. INPUT_TOO_LARGE, EXECUTION_BUSY, TIMED_OUT). The failure is already
+  // persisted in the run record; print a clean line for the operator instead of a stack trace.
+  const code = (err as { code?: unknown }).code;
+  console.error(typeof code === "string" ? `error: ${code} — ${(err as Error).message}` : `error: ${(err as Error).message}`);
+  process.exit(1);
+}

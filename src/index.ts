@@ -9,7 +9,18 @@ export { resolveSecret } from "./core/secrets.ts";
 export { HttpFetchProvider, FileFetchProvider, RoutingFetchProvider, fileRefToPath } from "./core/fetch.ts";
 export type { HttpFetchOptions } from "./core/fetch.ts";
 export { importJobSpec } from "./core/jobspec.ts";
-export { runJob, dueJobs, previousTick, nextTick } from "./core/runner.ts";
+export { runJob, dueJobs, previousTick, nextTick, logicalRequestHash } from "./core/runner.ts";
+export type { RunJobOptions } from "./core/runner.ts";
+export {
+  ExecutionCoordinator,
+  ExecutionBusyError,
+  ExecutionTimeoutError,
+  DEFAULT_MAX_PENDING,
+  DEFAULT_MAX_DURATION_MS,
+} from "./core/execution.ts";
+export type { CoordinatorOptions, ExecutionOutcome, PendingExecution } from "./core/execution.ts";
+export { enforceInputLimits, largestArrayLength, InputTooLargeError, DEFAULT_LIMITS } from "./core/limits.ts";
+export type { Limits } from "./core/limits.ts";
 export {
   normalizePusherFrame,
   toNotificationEvent,
