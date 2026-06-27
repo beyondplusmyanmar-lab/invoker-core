@@ -23,8 +23,16 @@ CREATE TABLE IF NOT EXISTS runs (
   duration_ms  INTEGER,
   started_at   INTEGER NOT NULL,
   finished_at  INTEGER,
-  error        TEXT
+  error        TEXT,
+  -- Terminal artifact, denormalized onto the run (report history). A pipeline job's artifact
+  -- has its own id, so the run can't be id-joined to it; carrying the reference here makes the
+  -- run the unit the manager sees: "this run produced this file".
+  artifact_sha256 TEXT,
+  artifact_path   TEXT,
+  artifact_type   TEXT,
+  artifact_size   INTEGER
 );
+CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs (started_at DESC);
 
 -- ADR-006: cache_key and artifact_sha256 are distinct, stored separately.
 CREATE TABLE IF NOT EXISTS artifacts (

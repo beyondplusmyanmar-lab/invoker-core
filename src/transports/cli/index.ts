@@ -56,6 +56,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdJobs(rest);
     case "run":
       return cmdRun(rest);
+    case "runs":
+      return cmdRuns(rest);
     case "tick":
       return cmdTick(rest);
     case "daemon":
@@ -251,6 +253,36 @@ async function cmdRun(args: string[]): Promise<number> {
     }
     const result = await runJob(job, store, makeFetcher());
     reportResult(result);
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+/** invoker runs [--limit N] [--json] — report history: recent runs and the artifacts they produced. */
+function cmdRuns(args: string[]): number {
+  const limit = Number(optValue(args, "--limit") ?? "20");
+  const store = new Store(WORKSPACE);
+  try {
+    const runs = store.listRuns(limit);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(runs, null, 2));
+      return 0;
+    }
+    if (runs.length === 0) {
+      console.log("no runs yet");
+      return 0;
+    }
+    for (const r of runs) {
+      const when = new Date(r.startedAt).toISOString().replace("T", " ").slice(0, 19);
+      const mark = r.status === "completed" ? "✓" : r.status === "failed" ? "✗" : "·";
+      const dur = r.durationMs != null ? `${r.durationMs}ms` : "—";
+      const what = r.jobName ?? r.capability;
+      const file = r.artifact ? `${r.artifact.type} ${r.artifact.sha256.slice(0, 12)}…` : "—";
+      const hit = r.cacheHit ? " (cache)" : "";
+      console.log(`${mark} ${when}  ${what.padEnd(20)} ${dur.padStart(7)}  ${file}${hit}`);
+      if (r.status === "failed" && r.error) console.log(`    ${r.error}`);
+    }
     return 0;
   } finally {
     store.close();

@@ -27,7 +27,7 @@ export type { LockInfo, TickResult, DaemonLoopOptions } from "./core/daemon.ts";
 export { runDoctor, gteVersion } from "./core/doctor.ts";
 export type { DoctorCheck, DoctorReport, CheckStatus, DoctorDeps } from "./core/doctor.ts";
 export { Store } from "./storage/db.ts";
-export type { RunRecord, DaemonHeartbeat, PluginSummary } from "./storage/db.ts";
+export type { RunRecord, RunListItem, DaemonHeartbeat, PluginSummary } from "./storage/db.ts";
 export type {
   AuthProvider,
   FetchProvider,

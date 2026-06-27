@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { join, dirname } from "node:path";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Artifact } from "../abi/index.ts";
 import type { SchedulePolicy, ScheduledJob, SchedulerState } from "../core/scheduler.ts";
@@ -16,6 +16,26 @@ export interface RunRecord {
   startedAt: number;
   finishedAt?: number;
   error?: string;
+  /** Terminal artifact reference, denormalized onto the run for report history. */
+  artifactSha256?: string;
+  artifactPath?: string;
+  artifactType?: string;
+  artifactSize?: number;
+}
+
+/** A run joined with its job's name + artifact, newest-first — what the History panel binds to. */
+export interface RunListItem {
+  id: string;
+  jobId?: string;
+  jobName?: string;
+  capability: string;
+  status: "pending" | "running" | "completed" | "failed";
+  cacheHit: boolean;
+  durationMs?: number;
+  startedAt: number;
+  finishedAt?: number;
+  error?: string;
+  artifact?: { sha256: string; path: string; type: string; size: number };
 }
 
 const SCHEMA_PATH = join(dirname(fileURLToPath(import.meta.url)), "schema.sql");
@@ -34,6 +54,29 @@ export class Store {
     this.db = new Database(join(workspaceDir, "invoker.sqlite"));
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(readFileSync(SCHEMA_PATH, "utf8"));
+    this.migrate();
+  }
+
+  /**
+   * Additive, idempotent column migrations. `CREATE TABLE IF NOT EXISTS` never alters an existing
+   * table, so a workspace created by an earlier schema needs the new columns added explicitly.
+   * Each ADD COLUMN throws "duplicate column" once the column exists — caught and ignored. This is
+   * the minimal migration story; a versioned framework arrives later (v0.4).
+   */
+  private migrate(): void {
+    const additions = [
+      "ALTER TABLE runs ADD COLUMN artifact_sha256 TEXT",
+      "ALTER TABLE runs ADD COLUMN artifact_path TEXT",
+      "ALTER TABLE runs ADD COLUMN artifact_type TEXT",
+      "ALTER TABLE runs ADD COLUMN artifact_size INTEGER",
+    ];
+    for (const sql of additions) {
+      try {
+        this.db.exec(sql);
+      } catch {
+        /* column already present */
+      }
+    }
   }
 
   private get artifactsDir(): string {
@@ -120,8 +163,10 @@ export class Store {
     this.db
       .query(
         `INSERT OR REPLACE INTO runs
-         (id, job_id, capability, status, cache_hit, duration_ms, started_at, finished_at, error)
-         VALUES ($id, $jobId, $cap, $status, $cacheHit, $dur, $startedAt, $finishedAt, $error)`,
+         (id, job_id, capability, status, cache_hit, duration_ms, started_at, finished_at, error,
+          artifact_sha256, artifact_path, artifact_type, artifact_size)
+         VALUES ($id, $jobId, $cap, $status, $cacheHit, $dur, $startedAt, $finishedAt, $error,
+          $aSha, $aPath, $aType, $aSize)`,
       )
       .run({
         $id: r.id,
@@ -133,7 +178,30 @@ export class Store {
         $startedAt: r.startedAt,
         $finishedAt: r.finishedAt ?? null,
         $error: r.error ?? null,
+        $aSha: r.artifactSha256 ?? null,
+        $aPath: r.artifactPath ?? null,
+        $aType: r.artifactType ?? null,
+        $aSize: r.artifactSize ?? null,
       });
+  }
+
+  /** Recent runs, newest-first, each joined to its job name + denormalized artifact. */
+  listRuns(limit = 50): RunListItem[] {
+    const rows = this.db
+      .query(
+        `SELECT r.*, j.name AS job_name
+         FROM runs r LEFT JOIN jobs j ON j.id = r.job_id
+         ORDER BY r.started_at DESC, r.id LIMIT ?`,
+      )
+      .all(limit) as Record<string, unknown>[];
+    return rows.map(rowToRunItem);
+  }
+
+  /** Write a self-describing manifest sidecar next to an artifact (survives without the DB). */
+  writeManifest(id: string, manifest: Record<string, unknown>): string {
+    const path = join(this.artifactsDir, `${id}.manifest.json`);
+    writeFileSync(path, JSON.stringify(manifest, null, 2));
+    return path;
   }
 
   // --- scheduler state -----------------------------------------------------
@@ -248,6 +316,31 @@ function rowToJob(r: Record<string, unknown>): ScheduledJob {
     policy: String(r.policy) as SchedulePolicy,
     maxLagMs: Number(r.max_lag_ms),
     enabled: Number(r.enabled) === 1,
+  };
+}
+
+function rowToRunItem(r: Record<string, unknown>): RunListItem {
+  const sha = r.artifact_sha256;
+  return {
+    id: String(r.id),
+    jobId: r.job_id == null ? undefined : String(r.job_id),
+    jobName: r.job_name == null ? undefined : String(r.job_name),
+    capability: String(r.capability),
+    status: String(r.status) as RunListItem["status"],
+    cacheHit: Number(r.cache_hit) === 1,
+    durationMs: r.duration_ms == null ? undefined : Number(r.duration_ms),
+    startedAt: Number(r.started_at),
+    finishedAt: r.finished_at == null ? undefined : Number(r.finished_at),
+    error: r.error == null ? undefined : String(r.error),
+    artifact:
+      sha == null
+        ? undefined
+        : {
+            sha256: String(sha),
+            path: String(r.artifact_path),
+            type: String(r.artifact_type),
+            size: Number(r.artifact_size),
+          },
   };
 }
 

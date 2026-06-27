@@ -44,6 +44,8 @@ export async function runJob(
             },
             store,
           );
+    const finishedAt = Date.now();
+    const art = result.artifact; // a pipeline's terminal artifact has its own id; carry it on the run
     store.recordRun({
       id: runId,
       jobId: job.id,
@@ -52,8 +54,28 @@ export async function runJob(
       cacheHit: result.cacheHit,
       durationMs: result.durationMs,
       startedAt,
-      finishedAt: Date.now(),
+      finishedAt,
+      artifactSha256: art?.artifactSha256,
+      artifactPath: art?.path,
+      artifactType: art?.type,
+      artifactSize: art?.size,
     });
+    if (art) {
+      // Self-describing sidecar: a report stays interpretable from the filesystem alone, even
+      // if the sqlite index is lost — consistent with Hands being artifact authority.
+      store.writeManifest(runId, {
+        id: runId,
+        job: job.name,
+        capability: job.capability,
+        renderer: art.type,
+        engine_version: art.engineVersion,
+        sha256: art.artifactSha256,
+        size: art.size,
+        generated_at: new Date(finishedAt).toISOString(),
+        duration_ms: result.durationMs,
+        cache_hit: result.cacheHit,
+      });
+    }
     store.setSchedulerState(job.id, { lastRunAt: startedAt, lastStatus: "completed" });
     return result;
   } catch (err) {
