@@ -5,6 +5,7 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { registry } from "../../core/registry.ts";
 import { invoke } from "../../core/invoke.ts";
 import { Store } from "../../storage/db.ts";
@@ -15,6 +16,18 @@ import { runJob, dueJobs } from "../../core/runner.ts";
 import { SchedulePolicy, type ScheduledJob } from "../../core/scheduler.ts";
 import { importJobSpec } from "../../core/jobspec.ts";
 import { assertDeterministic } from "../../engines/conformance.ts";
+import {
+  acquireLock,
+  releaseLock,
+  readLock,
+  isAlive,
+  runDaemonLoop,
+  abortableSleep,
+  DEFAULT_INTERVAL_MS,
+} from "../../core/daemon.ts";
+import { runDoctor } from "../../core/doctor.ts";
+
+const SELF = fileURLToPath(import.meta.url);
 
 const WORKSPACE = process.env.INVOKER_HOME ?? join(homedir(), ".invoker");
 
@@ -44,6 +57,10 @@ async function main(argv: string[]): Promise<number> {
       return cmdRun(rest);
     case "tick":
       return cmdTick(rest);
+    case "daemon":
+      return cmdDaemon(rest);
+    case "doctor":
+      return cmdDoctor(rest);
     case undefined:
     case "help":
     case "--help":
@@ -259,6 +276,163 @@ async function cmdTick(_args: string[]): Promise<number> {
   }
 }
 
+/** invoker daemon <run|start|stop|status> — the persistent scheduler (P2). */
+async function cmdDaemon(args: string[]): Promise<number> {
+  switch (args[0]) {
+    case "run":
+      return daemonRun();
+    case "start":
+      return daemonStart();
+    case "stop":
+      return daemonStop();
+    case "status":
+      return daemonStatus();
+    default:
+      console.error("usage: invoker daemon <run|start|stop|status>");
+      return 1;
+  }
+}
+
+/** Foreground worker (what launchd/systemd should supervise). Holds the lock, loops until signalled. */
+async function daemonRun(): Promise<number> {
+  const lock = acquireLock(WORKSPACE);
+  if (!lock.ok) {
+    console.error(`daemon already running (pid ${lock.holder.pid})`);
+    return 1;
+  }
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+
+  const store = new Store(WORKSPACE);
+  console.log(
+    `daemon running (pid ${process.pid}), interval ${DEFAULT_INTERVAL_MS}ms — Ctrl-C to stop`,
+  );
+  try {
+    await runDaemonLoop(store, {
+      signal: controller.signal,
+      fetcher: makeFetcher(),
+      onTick: (r) => {
+        if (r.ran || r.failed) {
+          console.log(`[${new Date(r.at).toISOString()}] tick: ran ${r.ran}, failed ${r.failed}`);
+        }
+      },
+    });
+    console.log("daemon stopped");
+    return 0;
+  } finally {
+    store.close();
+    releaseLock(WORKSPACE);
+  }
+}
+
+/** Spawn `daemon run` detached so the shell returns. Production deploys supervise `run` directly. */
+async function daemonStart(): Promise<number> {
+  const held = readLock(WORKSPACE);
+  if (held && isAlive(held.pid)) {
+    console.error(`daemon already running (pid ${held.pid})`);
+    return 1;
+  }
+  const proc = Bun.spawn([process.execPath, SELF, "daemon", "run"], {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+    env: process.env,
+  });
+  proc.unref();
+  for (let i = 0; i < 20; i++) {
+    const l = readLock(WORKSPACE);
+    if (l && isAlive(l.pid)) {
+      console.log(`daemon started (pid ${l.pid})`);
+      return 0;
+    }
+    await abortableSleep(100);
+  }
+  console.error("daemon did not confirm within 2s; run `invoker daemon status`");
+  return 1;
+}
+
+/** SIGTERM the lock holder and wait for it to exit. */
+async function daemonStop(): Promise<number> {
+  const held = readLock(WORKSPACE);
+  if (!held || !isAlive(held.pid)) {
+    if (held) releaseLock(WORKSPACE, held.pid); // clear a stale lock
+    console.log("daemon not running");
+    return 0;
+  }
+  try {
+    process.kill(held.pid, "SIGTERM");
+  } catch {
+    /* raced to exit */
+  }
+  for (let i = 0; i < 50; i++) {
+    if (!isAlive(held.pid)) {
+      console.log(`daemon stopped (pid ${held.pid})`);
+      return 0;
+    }
+    await abortableSleep(100);
+  }
+  console.error(`daemon (pid ${held.pid}) did not exit within 5s`);
+  return 1;
+}
+
+function daemonStatus(): number {
+  const held = readLock(WORKSPACE);
+  const store = new Store(WORKSPACE);
+  try {
+    const hb = store.getDaemonHeartbeat();
+    const alive = held ? isAlive(held.pid) : false;
+    if (!held) {
+      console.log("daemon      not running (no lock)");
+    } else {
+      console.log(`daemon      ${alive ? "running" : "stale lock (process gone)"}`);
+      console.log(`pid         ${held.pid}`);
+      console.log(`started     ${new Date(held.startedAt).toISOString()}`);
+    }
+    if (hb) {
+      console.log(`ticks       ${hb.ticks}`);
+      console.log(`last tick   ${hb.lastTickAt ? new Date(hb.lastTickAt).toISOString() : "—"}`);
+      // `hb.status` is the last value persisted to disk. When the lock is held
+      // but the process is gone, that value is stale — reconcile against the
+      // live probe so a dead daemon never reports a live heartbeat.
+      console.log(`heartbeat   ${held && !alive ? "stale (process gone)" : hb.status}`);
+    }
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+/** invoker doctor [--strict] — read-only health sweep (P4). Exit 1 on FAIL; --strict also fails warnings. */
+async function cmdDoctor(args: string[]): Promise<number> {
+  const strict = args.includes("--strict");
+  const store = new Store(WORKSPACE);
+  try {
+    const report = await runDoctor({
+      workspace: WORKSPACE,
+      store,
+      registry,
+      tokenRef: process.env.INVOKER_TOKEN_REF,
+      bunVersion: typeof Bun !== "undefined" ? Bun.version : undefined,
+      strict,
+    });
+    const mark = (s: string) => (s === "ok" ? "✓" : s === "warn" ? "⚠" : "✗");
+    for (const c of report.checks) {
+      console.log(`${mark(c.status)} ${c.name.padEnd(13)} ${c.detail}`);
+    }
+    if (!report.ok) {
+      const bad = report.checks.filter((c) =>
+        strict ? c.status !== "ok" : c.status === "fail",
+      );
+      console.log(`\n${strict ? "strict " : ""}check failed: ${bad.map((c) => c.name).join(", ")}`);
+    }
+    return report.ok ? 0 : 1;
+  } finally {
+    store.close();
+  }
+}
+
 function makeFetcher(): RoutingFetchProvider {
   // Token reference (env:/file:/keychain:/exec:) supplied out-of-band; never inline (ADR-005).
   // Routing handles file: sources locally (offline) and everything else over HTTP.
@@ -305,7 +479,10 @@ function usage(code = 0): number {
       "  invoker jobs import <file.toml>               import a (pipeline) job; file: sources resolve to absolute",
       "  invoker jobs list                             list scheduled jobs",
       "  invoker run <jobId>                           force-run a job now",
-      "  invoker tick                                  run every job due under its policy",
+      "  invoker tick                                  run every job due under its policy (one-shot)",
+      "",
+      "  invoker daemon <run|start|stop|status>        persistent scheduler (tick loop)",
+      "  invoker doctor [--strict]                     read-only health sweep (--strict: warnings fail)",
       "",
       "  (mcp, ws, tauri transports: see ARCHITECTURE.md roadmap)",
     ].join("\n"),

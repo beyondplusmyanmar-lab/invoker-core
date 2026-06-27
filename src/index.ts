@@ -12,8 +12,22 @@ export { importJobSpec } from "./core/jobspec.ts";
 export { runJob, dueJobs, previousTick } from "./core/runner.ts";
 export { SchedulePolicy, decideRun } from "./core/scheduler.ts";
 export type { ScheduledJob, SchedulerState } from "./core/scheduler.ts";
+export {
+  runDaemonLoop,
+  tickOnce,
+  acquireLock,
+  releaseLock,
+  readLock,
+  isAlive,
+  abortableSleep,
+  lockPath,
+  DEFAULT_INTERVAL_MS,
+} from "./core/daemon.ts";
+export type { LockInfo, TickResult, DaemonLoopOptions } from "./core/daemon.ts";
+export { runDoctor, gteVersion } from "./core/doctor.ts";
+export type { DoctorCheck, DoctorReport, CheckStatus, DoctorDeps } from "./core/doctor.ts";
 export { Store } from "./storage/db.ts";
-export type { RunRecord } from "./storage/db.ts";
+export type { RunRecord, DaemonHeartbeat, PluginSummary } from "./storage/db.ts";
 export type {
   AuthProvider,
   FetchProvider,

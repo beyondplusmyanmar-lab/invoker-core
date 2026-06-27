@@ -67,3 +67,14 @@ CREATE TABLE IF NOT EXISTS scheduler_state (
   last_run_at INTEGER,
   last_status TEXT
 );
+
+-- P2 daemon: single-row heartbeat so `daemon status` and `doctor` can read liveness
+-- without parsing the lockfile. The lockfile owns mutual exclusion; this owns observability.
+CREATE TABLE IF NOT EXISTS daemon_state (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),
+  pid          INTEGER NOT NULL,
+  started_at   INTEGER NOT NULL,
+  last_tick_at INTEGER,
+  ticks        INTEGER NOT NULL DEFAULT 0,
+  status       TEXT NOT NULL              -- running | stopped
+);
