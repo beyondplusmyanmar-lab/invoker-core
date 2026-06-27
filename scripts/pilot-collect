@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# pilot-collect — one morning snapshot of the v0.2.0-rc1 pilot (see PILOT.md).
+# Intentionally dumb: it runs the three read-only commands, samples the daemon's
+# memory, and records build identity into a timestamped folder. It is operator
+# tooling, not runtime capability — safe to run during the freeze.
+set -euo pipefail
+
+# Fail loud if the binary is missing (a real setup error), but NOT if a gate
+# trips below — that is exactly when we need a complete snapshot.
+command -v invoker >/dev/null || { echo "invoker not on PATH" >&2; exit 1; }
+
+STAMP=$(date +"%Y%m%d-%H%M%S")
+OUT="pilot/${STAMP}"
+mkdir -p "$OUT/support"
+
+echo "Collecting pilot snapshot → $OUT"
+
+# Gates 1-6 come from these two read-only commands. `doctor --pilot` exits 1 when
+# a gate FAILS and `health` exits 1 on DB trouble — both still print their JSON, so
+# tolerate the non-zero exit and keep collecting (the failing morning is the one we
+# most need a full snapshot for).
+invoker doctor --pilot --json > "$OUT/doctor.json" || true
+invoker health --json         > "$OUT/health.json" || true
+
+# The bundle the operator would send if a gate fails.
+invoker support bundle --out "$OUT/support" || true
+
+# Memory-growth gate: read the daemon's PID from its own lockfile (the runtime's
+# authoritative single-instance record) rather than grepping process names — exact,
+# and immune to how the binary happens to be named or invoked.
+WS="${INVOKER_HOME:-$HOME/.invoker}"
+PID=$(grep -o '"pid":[0-9]*' "$WS/daemon.lock" 2>/dev/null | grep -o '[0-9]*' || true)
+if [ -n "${PID:-}" ] && kill -0 "$PID" 2>/dev/null; then
+  ps -o pid,rss,vsz,etime,command -p "$PID" > "$OUT/rss.txt"
+else
+  echo "daemon not running (no live pid in $WS/daemon.lock)" > "$OUT/rss.txt"
+fi
+
+# Build identity: version from the health snapshot (no --version command exists),
+# exact build from git when run from a checkout (distinguishes rc1 from a hotfix).
+VERSION=$(grep -m1 '"version"' "$OUT/health.json" | sed -E 's/.*"version": *"([^"]+)".*/\1/' || true)
+HEAD=$(git rev-parse HEAD 2>/dev/null || echo "not a checkout")
+{
+  echo "collected_at: $STAMP"
+  echo "host:         $(hostname)"
+  echo "version:      ${VERSION:-unknown}"
+  echo "git_head:     $HEAD"
+} > "$OUT/meta.txt"
+
+# Operator's free-form observations — the only instrument for the confusion gate.
+cat > "$OUT/notes.txt" <<'EOF'
+Operator comments (verbatim — what they said and did):
+
+
+
+
+EOF
+
+echo ""
+echo "Pilot snapshot saved: $OUT"
+echo "  doctor.json health.json support/ rss.txt meta.txt notes.txt"
+echo "Now fill in notes.txt and the PILOT.md ledger row."

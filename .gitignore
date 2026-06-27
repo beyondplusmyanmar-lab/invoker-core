@@ -7,6 +7,9 @@ bun.lockb
 *.sqlite
 *.sqlite-*
 
+# pilot snapshots from scripts/pilot-collect (per-run; contains a support bundle)
+pilot/
+
 # resolved secrets must never land in the tree
 *.key
 secrets.local.*
