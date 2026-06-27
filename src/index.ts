@@ -9,7 +9,7 @@ export { resolveSecret } from "./core/secrets.ts";
 export { HttpFetchProvider, FileFetchProvider, RoutingFetchProvider, fileRefToPath } from "./core/fetch.ts";
 export type { HttpFetchOptions } from "./core/fetch.ts";
 export { importJobSpec } from "./core/jobspec.ts";
-export { runJob, dueJobs, previousTick } from "./core/runner.ts";
+export { runJob, dueJobs, previousTick, nextTick } from "./core/runner.ts";
 export { SchedulePolicy, decideRun } from "./core/scheduler.ts";
 export type { ScheduledJob, SchedulerState } from "./core/scheduler.ts";
 export {
@@ -27,7 +27,7 @@ export type { LockInfo, TickResult, DaemonLoopOptions } from "./core/daemon.ts";
 export { runDoctor, gteVersion } from "./core/doctor.ts";
 export type { DoctorCheck, DoctorReport, CheckStatus, DoctorDeps } from "./core/doctor.ts";
 export { Store } from "./storage/db.ts";
-export type { RunRecord, RunListItem, DaemonHeartbeat, PluginSummary } from "./storage/db.ts";
+export type { RunRecord, RunListItem, ScheduleRow, DaemonHeartbeat, PluginSummary } from "./storage/db.ts";
 export type {
   AuthProvider,
   FetchProvider,

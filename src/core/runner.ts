@@ -121,6 +121,17 @@ export function previousTick(cron: Cron, lowerBoundMs: number, now: number): num
   return last;
 }
 
+/**
+ * The next scheduled tick strictly after `now`, for display on the schedule surface ("next run").
+ * Returns null for a manual (empty) cron. Unlike `previousTick` this is what croner answers
+ * natively, so it's a thin wrapper that also guards the manual case.
+ */
+export function nextTick(cron: string, now = Date.now()): number | null {
+  if (!cron) return null;
+  const t = new Cron(cron).nextRun(new Date(now));
+  return t ? t.getTime() : null;
+}
+
 /** Filter to jobs whose most recent cron tick is due under their missed-run policy. */
 export function dueJobs(jobs: ScheduledJob[], store: Store, now = Date.now()): ScheduledJob[] {
   return jobs.filter((job) => {

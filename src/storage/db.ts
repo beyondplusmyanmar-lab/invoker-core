@@ -38,6 +38,27 @@ export interface RunListItem {
   artifact?: { sha256: string; path: string; type: string; size: number };
 }
 
+/**
+ * A scheduled job joined to its latest run — the "current status" view the manager's schedule
+ * surface binds to. History (`runs`) is the full audit; this is the single live row per job:
+ * is it enabled, when did it last run, did it succeed, how long did it take, what did it render.
+ */
+export interface ScheduleRow {
+  id: string;
+  name: string;
+  capability: string;
+  /** "" = manual (never fires on a tick; run by hand only). */
+  cron: string;
+  policy: SchedulePolicy;
+  enabled: boolean;
+  /** Terminal renderer of the most recent run (artifact type), if any has produced one. */
+  renderer?: string;
+  lastRunAt?: number;
+  lastStatus?: "pending" | "running" | "completed" | "failed";
+  lastDurationMs?: number;
+  lastCacheHit?: boolean;
+}
+
 const SCHEMA_PATH = join(dirname(fileURLToPath(import.meta.url)), "schema.sql");
 
 /**
@@ -155,6 +176,38 @@ export class Store {
       unknown
     >[];
     return rows.map(rowToJob);
+  }
+
+  /** Toggle a job's enabled flag in place. Returns false if no such job (so the CLI can 404). */
+  setJobEnabled(id: string, enabled: boolean): boolean {
+    const r = this.db
+      .query("UPDATE jobs SET enabled = $enabled WHERE id = $id")
+      .run({ $id: id, $enabled: enabled ? 1 : 0 });
+    return r.changes > 0;
+  }
+
+  /**
+   * Every job joined to its latest run — the schedule surface's status view. The correlated
+   * subquery picks the newest run per job (started_at desc, id as a stable tiebreak), so the
+   * join stays one row per job even with hundreds of runs.
+   */
+  listSchedules(): ScheduleRow[] {
+    const rows = this.db
+      .query(
+        `SELECT j.*,
+                r.status      AS last_status,
+                r.started_at  AS last_run_at,
+                r.duration_ms AS last_duration_ms,
+                r.cache_hit   AS last_cache_hit,
+                r.artifact_type AS last_renderer
+         FROM jobs j
+         LEFT JOIN runs r ON r.id = (
+           SELECT id FROM runs WHERE job_id = j.id ORDER BY started_at DESC, id LIMIT 1
+         )
+         ORDER BY j.name`,
+      )
+      .all() as Record<string, unknown>[];
+    return rows.map(rowToScheduleRow);
   }
 
   // --- runs ----------------------------------------------------------------
@@ -316,6 +369,22 @@ function rowToJob(r: Record<string, unknown>): ScheduledJob {
     policy: String(r.policy) as SchedulePolicy,
     maxLagMs: Number(r.max_lag_ms),
     enabled: Number(r.enabled) === 1,
+  };
+}
+
+function rowToScheduleRow(r: Record<string, unknown>): ScheduleRow {
+  return {
+    id: String(r.id),
+    name: String(r.name),
+    capability: String(r.capability),
+    cron: r.cron == null ? "" : String(r.cron),
+    policy: String(r.policy) as SchedulePolicy,
+    enabled: Number(r.enabled) === 1,
+    renderer: r.last_renderer == null ? undefined : String(r.last_renderer),
+    lastRunAt: r.last_run_at == null ? undefined : Number(r.last_run_at),
+    lastStatus: r.last_status == null ? undefined : (String(r.last_status) as ScheduleRow["lastStatus"]),
+    lastDurationMs: r.last_duration_ms == null ? undefined : Number(r.last_duration_ms),
+    lastCacheHit: r.last_cache_hit == null ? undefined : Number(r.last_cache_hit) === 1,
   };
 }
 

@@ -13,7 +13,7 @@ import { excelRender } from "../../engines/excel/index.ts";
 import { docxRender } from "../../engines/docx/index.ts";
 import { tabularMap } from "../../engines/tabular/index.ts";
 import { HttpFetchProvider, RoutingFetchProvider } from "../../core/fetch.ts";
-import { runJob, dueJobs } from "../../core/runner.ts";
+import { runJob, dueJobs, nextTick } from "../../core/runner.ts";
 import { SchedulePolicy, type ScheduledJob } from "../../core/scheduler.ts";
 import { importJobSpec } from "../../core/jobspec.ts";
 import { assertDeterministic } from "../../engines/conformance.ts";
@@ -54,6 +54,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdCapability(rest);
     case "jobs":
       return cmdJobs(rest);
+    case "schedule":
+      return cmdSchedule(rest);
     case "run":
       return cmdRun(rest);
     case "runs":
@@ -235,6 +237,130 @@ async function cmdJobs(args: string[]): Promise<number> {
   } finally {
     store.close();
   }
+}
+
+/**
+ * invoker schedule <list | enable <id> | disable <id> | run <id> | edit <id> ...>
+ *
+ * Manager-facing verbs over the same alpha jobs: a "schedule" is just a job with a cron and a
+ * current status (last run/result/duration), framed the way a branch manager reaches for it —
+ * "enable the daily sales report", not "upsert a job". Holds no new state of its own.
+ *   edit <id> [--cron "<expr>"] [--policy catchup|skip|resume] [--max-lag ms] [--name <name>]
+ */
+async function cmdSchedule(args: string[]): Promise<number> {
+  const sub = args[0];
+  const store = new Store(WORKSPACE);
+  try {
+    switch (sub) {
+      case "list":
+      case undefined:
+        return scheduleList(store, args.includes("--json"));
+      case "enable":
+      case "disable": {
+        const id = args[1];
+        if (!id) {
+          console.error(`usage: invoker schedule ${sub} <id>`);
+          return 1;
+        }
+        if (!store.setJobEnabled(id, sub === "enable")) {
+          console.error(`no such schedule: ${id}`);
+          return 1;
+        }
+        console.log(`schedule '${id}' ${sub}d`);
+        return 0;
+      }
+      case "run": {
+        const id = args[1];
+        if (!id) {
+          console.error("usage: invoker schedule run <id>");
+          return 1;
+        }
+        const job = store.getJob(id);
+        if (!job) {
+          console.error(`no such schedule: ${id}`);
+          return 1;
+        }
+        reportResult(await runJob(job, store, makeFetcher()));
+        return 0;
+      }
+      case "edit":
+        return scheduleEdit(store, args.slice(1));
+      default:
+        console.error("usage: invoker schedule <list|enable <id>|disable <id>|run <id>|edit <id> ...>");
+        return 1;
+    }
+  } finally {
+    store.close();
+  }
+}
+
+/** Render the schedule status table (or JSON): each job + its latest run, with the next tick. */
+function scheduleList(store: Store, asJson: boolean): number {
+  const now = Date.now();
+  const rows = store.listSchedules();
+  if (asJson) {
+    // A disabled schedule won't fire, so it has no next run — keep JSON and table agreed.
+    const enriched = rows.map((r) => ({ ...r, nextRunAt: r.enabled ? nextTick(r.cron, now) : null }));
+    console.log(JSON.stringify(enriched, null, 2));
+    return 0;
+  }
+  if (rows.length === 0) {
+    console.log("no schedules yet — add one with `invoker jobs add` or `invoker jobs import`");
+    return 0;
+  }
+  const fmt = (t?: number | null) =>
+    t == null ? "—" : new Date(t).toISOString().replace("T", " ").slice(0, 16);
+  for (const r of rows) {
+    const state = !r.enabled ? "disabled" : r.cron ? "enabled " : "manual  ";
+    const cron = r.cron || "(manual)";
+    const status = r.lastStatus
+      ? r.lastStatus === "completed"
+        ? `✓${r.lastCacheHit ? " cache" : ""}`
+        : r.lastStatus === "failed"
+          ? "✗ failed"
+          : `· ${r.lastStatus}`
+      : "never run";
+    const dur = r.lastDurationMs != null ? `${r.lastDurationMs}ms` : "—";
+    const next = r.enabled && r.cron ? fmt(nextTick(r.cron, now)) : "—";
+    console.log(
+      `${r.id.padEnd(16)} ${state}  ${cron.padEnd(14)} ` +
+        `last ${fmt(r.lastRunAt)}  ${status.padEnd(8)} ${dur.padStart(7)}  ` +
+        `${(r.renderer ?? "—").padEnd(4)}  next ${next}`,
+    );
+  }
+  return 0;
+}
+
+/** Mutate a schedule's cron/policy/max-lag/name in place (read-modify-write via upsertJob). */
+function scheduleEdit(store: Store, args: string[]): number {
+  const id = args[0];
+  if (!id) {
+    console.error("usage: invoker schedule edit <id> [--cron \"<expr>\"] [--policy ...] [--max-lag ms] [--name <name>]");
+    return 1;
+  }
+  const job = store.getJob(id);
+  if (!job) {
+    console.error(`no such schedule: ${id}`);
+    return 1;
+  }
+  const cron = optValue(args, "--cron");
+  const policy = optValue(args, "--policy");
+  const maxLag = optValue(args, "--max-lag");
+  const name = optValue(args, "--name");
+  if (cron === undefined && policy === undefined && maxLag === undefined && name === undefined) {
+    console.error("nothing to change: pass at least one of --cron --policy --max-lag --name");
+    return 1;
+  }
+  if (cron !== undefined) job.cron = cron; // "" clears it back to manual
+  if (policy !== undefined) job.policy = policy as SchedulePolicy;
+  if (maxLag !== undefined) job.maxLagMs = Number(maxLag);
+  if (name !== undefined) job.name = name;
+  store.upsertJob(job);
+  console.log(
+    `schedule '${id}' updated (cron="${job.cron}", policy=${job.policy}, ` +
+      `max-lag=${job.maxLagMs}ms)`,
+  );
+  return 0;
 }
 
 /** invoker run <jobId> — force-run a job now, regardless of schedule. */
@@ -513,6 +639,11 @@ function usage(code = 0): number {
       "  invoker jobs list                             list scheduled jobs",
       "  invoker run <jobId>                           force-run a job now",
       "  invoker tick                                  run every job due under its policy (one-shot)",
+      "",
+      "  invoker schedule list                         schedules + current status (last run / next run)",
+      "  invoker schedule enable|disable <id>          turn a schedule on/off",
+      "  invoker schedule run <id>                     run a schedule now",
+      "  invoker schedule edit <id> --cron \"<expr>\" [--policy ...] [--max-lag ms] [--name <n>]",
       "",
       "  invoker daemon <run|start|stop|status>        persistent scheduler (tick loop)",
       "  invoker doctor [--strict]                     read-only health sweep (--strict: warnings fail)",
