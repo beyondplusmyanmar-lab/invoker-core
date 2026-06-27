@@ -24,6 +24,7 @@ import type { ListenerConfig } from "../../core/notifications.ts";
 import { BusinessAIClient, FetchChatTransport } from "../../core/businessai.ts";
 import { verifyArtifact } from "../../core/verify.ts";
 import { gatherHealth, type HealthReport } from "../../core/health.ts";
+import { startUiServer } from "../ui/server.ts";
 import { VERSION } from "../../version.ts";
 import { resolveSecret } from "../../core/secrets.ts";
 import { assertDeterministic } from "../../engines/conformance.ts";
@@ -84,6 +85,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdHealth(rest);
     case "cleanup":
       return cmdCleanup(rest);
+    case "ui":
+      return cmdUi(rest);
     case "doctor":
       return cmdDoctor(rest);
     case undefined:
@@ -899,6 +902,40 @@ function cmdCleanup(args: string[]): number {
   }
 }
 
+/** invoker ui [--port N] — the local dashboard. A consume-only HTTP server; runs until Ctrl-C. */
+async function cmdUi(args: string[]): Promise<number> {
+  const port = Number(optValue(args, "--port") ?? process.env.INVOKER_UI_PORT ?? "3710");
+  const store = new Store(WORKSPACE);
+  const limits = makeLimits();
+  const server = startUiServer(
+    {
+      store,
+      version: VERSION,
+      fetcher: makeFetcher(),
+      coordinator: makeCoordinator(limits),
+      limits,
+      retention: makeRetention(),
+      queueLimit: Number(process.env.INVOKER_MAX_PENDING ?? DEFAULT_MAX_PENDING),
+      daemonAlive: () => {
+        const held = readLock(WORKSPACE);
+        return held ? isAlive(held.pid) : false;
+      },
+      workspaceDir: WORKSPACE,
+    },
+    port,
+  );
+  console.log(`dashboard on http://localhost:${server.port} — Ctrl-C to stop`);
+  await new Promise<void>((resolve) => {
+    const stop = () => resolve();
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+  });
+  server.stop(true);
+  store.close();
+  console.log("dashboard stopped");
+  return 0;
+}
+
 /** invoker doctor [--strict] — read-only health sweep (P4). Exit 1 on FAIL; --strict also fails warnings. */
 async function cmdDoctor(args: string[]): Promise<number> {
   const strict = args.includes("--strict");
@@ -1028,6 +1065,7 @@ function usage(code = 0): number {
       "",
       "  invoker health [--json]                       operability snapshot (scheduler/coordinator/cache/disk)",
       "  invoker cleanup [--dry-run] [--json]          enforce retention budgets (oldest artifacts first)",
+      "  invoker ui [--port N]                         local dashboard (default :3710; consume-only)",
       "  invoker doctor [--strict]                     read-only health sweep (--strict: warnings fail)",
       "",
       "  (mcp, ws, tauri transports: see ARCHITECTURE.md roadmap)",

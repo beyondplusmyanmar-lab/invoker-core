@@ -41,6 +41,8 @@ export type { HealthReport, HealthInputs, ConnStatus, SchedulerStatus, GatherHea
 export { runCleanup, planArtifactCleanup, maybeMaintain, DEFAULT_RETENTION } from "./core/retention.ts";
 export type { RetentionPolicy, CleanupReport, ArtifactBrief } from "./core/retention.ts";
 export { VERSION } from "./version.ts";
+export { handleRequest, startUiServer } from "./transports/ui/server.ts";
+export type { UiContext } from "./transports/ui/server.ts";
 export { SchedulePolicy, decideRun } from "./core/scheduler.ts";
 export type { ScheduledJob, SchedulerState } from "./core/scheduler.ts";
 export {
