@@ -108,6 +108,14 @@ export class Store {
       "ALTER TABLE runs ADD COLUMN artifact_size INTEGER",
       "ALTER TABLE runs ADD COLUMN manifest_sha256 TEXT",
       "ALTER TABLE runs ADD COLUMN collapsed INTEGER NOT NULL DEFAULT 0",
+      // jobs columns added after the original schema (pipeline + contract work); an
+      // alpha-era workspace has a jobs table without them. Defaults mirror schema.sql.
+      "ALTER TABLE jobs ADD COLUMN contract_version INTEGER NOT NULL DEFAULT 1",
+      "ALTER TABLE jobs ADD COLUMN source TEXT",
+      "ALTER TABLE jobs ADD COLUMN template TEXT",
+      "ALTER TABLE jobs ADD COLUMN steps TEXT",
+      "ALTER TABLE jobs ADD COLUMN policy TEXT NOT NULL DEFAULT 'catchup'",
+      "ALTER TABLE jobs ADD COLUMN max_lag_ms INTEGER NOT NULL DEFAULT 86400000",
     ];
     for (const sql of additions) {
       try {
