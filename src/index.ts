@@ -10,6 +10,15 @@ export { HttpFetchProvider, FileFetchProvider, RoutingFetchProvider, fileRefToPa
 export type { HttpFetchOptions } from "./core/fetch.ts";
 export { importJobSpec } from "./core/jobspec.ts";
 export { runJob, dueJobs, previousTick, nextTick } from "./core/runner.ts";
+export {
+  normalizePusherFrame,
+  toNotificationEvent,
+  pusherUrl,
+  PUSHER_PROTOCOL,
+} from "./core/notifications.ts";
+export type { NotificationEvent, ListenerConfig, PusherFrame } from "./core/notifications.ts";
+export { runListener } from "./core/notification-listener.ts";
+export type { ListenerEvents } from "./core/notification-listener.ts";
 export { SchedulePolicy, decideRun } from "./core/scheduler.ts";
 export type { ScheduledJob, SchedulerState } from "./core/scheduler.ts";
 export {
@@ -27,7 +36,14 @@ export type { LockInfo, TickResult, DaemonLoopOptions } from "./core/daemon.ts";
 export { runDoctor, gteVersion } from "./core/doctor.ts";
 export type { DoctorCheck, DoctorReport, CheckStatus, DoctorDeps } from "./core/doctor.ts";
 export { Store } from "./storage/db.ts";
-export type { RunRecord, RunListItem, ScheduleRow, DaemonHeartbeat, PluginSummary } from "./storage/db.ts";
+export type {
+  RunRecord,
+  RunListItem,
+  ScheduleRow,
+  NotificationRecord,
+  DaemonHeartbeat,
+  PluginSummary,
+} from "./storage/db.ts";
 export type {
   AuthProvider,
   FetchProvider,

@@ -70,6 +70,19 @@ CREATE TABLE IF NOT EXISTS templates (
   PRIMARY KEY (name, version)
 );
 
+-- Inbound notifications received over the outbound Reverb/Pusher WebSocket (v0.2). A pure
+-- listener: dedup is the only correctness property (UNIQUE event_id), no queue/replay/guarantee.
+CREATE TABLE IF NOT EXISTS notifications (
+  id          TEXT PRIMARY KEY,
+  event_id    TEXT NOT NULL UNIQUE,       -- source id, or a content hash when the source has none
+  title       TEXT NOT NULL,
+  body        TEXT NOT NULL DEFAULT '',
+  type        TEXT NOT NULL DEFAULT '',
+  received_at INTEGER NOT NULL,
+  read_at     INTEGER                     -- NULL = unread
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_received_at ON notifications (received_at DESC);
+
 CREATE TABLE IF NOT EXISTS scheduler_state (
   job_id      TEXT PRIMARY KEY,
   last_run_at INTEGER,

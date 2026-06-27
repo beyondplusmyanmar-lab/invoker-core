@@ -16,6 +16,9 @@ import { HttpFetchProvider, RoutingFetchProvider } from "../../core/fetch.ts";
 import { runJob, dueJobs, nextTick } from "../../core/runner.ts";
 import { SchedulePolicy, type ScheduledJob } from "../../core/scheduler.ts";
 import { importJobSpec } from "../../core/jobspec.ts";
+import { runListener } from "../../core/notification-listener.ts";
+import type { ListenerConfig } from "../../core/notifications.ts";
+import { resolveSecret } from "../../core/secrets.ts";
 import { assertDeterministic } from "../../engines/conformance.ts";
 import {
   acquireLock,
@@ -60,6 +63,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdRun(rest);
     case "runs":
       return cmdRuns(rest);
+    case "notifications":
+      return cmdNotifications(rest);
     case "tick":
       return cmdTick(rest);
     case "daemon":
@@ -415,6 +420,142 @@ function cmdRuns(args: string[]): number {
   }
 }
 
+/**
+ * invoker notifications <list | read <id|--all> | listen [--channel <c> ...]>
+ *
+ * A pure listener over an outbound Reverb/Pusher WebSocket (ADR-004): connected / disconnected /
+ * message, dedup on event_id, mark-read. No queue, no replay, no delivery guarantee. Connection
+ * config comes from the environment so core stays DOEH-agnostic:
+ *   INVOKER_NOTIFY_HOST  INVOKER_NOTIFY_KEY  [INVOKER_NOTIFY_PORT] [INVOKER_NOTIFY_SCHEME=wss]
+ *   INVOKER_NOTIFY_CHANNELS=a,b   (or --channel a --channel b)   [INVOKER_NOTIFY_URL overrides host/port]
+ *   [INVOKER_NOTIFY_TOKEN_REF=env:…|file:…]  resolved as a bearer; never inline (ADR-005)
+ */
+async function cmdNotifications(args: string[]): Promise<number> {
+  const sub = args[0];
+  switch (sub) {
+    case "list":
+    case undefined:
+      return notifyList(args);
+    case "read":
+      return notifyRead(args);
+    case "listen":
+      return notifyListen(args);
+    default:
+      console.error("usage: invoker notifications <list|read <id|--all>|listen [--channel <c> ...]>");
+      return 1;
+  }
+}
+
+/** notifications list [--unread] [--json] — the NotificationCenter view: unread count + items. */
+function notifyList(args: string[]): number {
+  const store = new Store(WORKSPACE);
+  try {
+    const unreadOnly = args.includes("--unread");
+    const items = store.listNotifications({ unreadOnly });
+    const unread = store.unreadNotificationCount();
+    if (args.includes("--json")) {
+      console.log(JSON.stringify({ unread, items }, null, 2));
+      return 0;
+    }
+    console.log(`unread ${unread}`);
+    if (items.length === 0) {
+      console.log(unreadOnly ? "no unread notifications" : "no notifications yet");
+      return 0;
+    }
+    for (const n of items) {
+      const when = new Date(n.receivedAt).toISOString().replace("T", " ").slice(0, 16);
+      const mark = n.readAt ? " " : "●";
+      const body = n.body ? ` — ${n.body}` : "";
+      console.log(`${mark} ${when}  ${n.type.padEnd(8)} ${n.title}${body}`);
+      console.log(`    id ${n.id}`);
+    }
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+/** notifications read <id> | --all — mark one or every unread notification read. */
+function notifyRead(args: string[]): number {
+  const store = new Store(WORKSPACE);
+  try {
+    if (args.includes("--all")) {
+      const n = store.markAllNotificationsRead();
+      console.log(`marked ${n} notification${n === 1 ? "" : "s"} read`);
+      return 0;
+    }
+    const id = args[1];
+    if (!id) {
+      console.error("usage: invoker notifications read <id|--all>");
+      return 1;
+    }
+    if (!store.markNotificationRead(id)) {
+      console.error(`no such unread notification: ${id}`);
+      return 1;
+    }
+    console.log(`marked '${id}' read`);
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+/** notifications listen — foreground listener (what launchd/systemd supervises). Ctrl-C to stop. */
+async function notifyListen(args: string[]): Promise<number> {
+  const cfg = notifyConfigFromEnv(collectAll(args, "--channel"));
+  if (typeof cfg === "string") {
+    console.error(`cannot listen: ${cfg}`);
+    return 1;
+  }
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+
+  const store = new Store(WORKSPACE);
+  console.log(`listening on ${cfg.channels.join(", ")} — Ctrl-C to stop`);
+  try {
+    await runListener(cfg, store, {
+      signal: controller.signal,
+      onConnected: (sid) => console.log(`[notify] connected${sid ? ` (${sid})` : ""}`),
+      onDisconnected: (why) => console.log(`[notify] disconnected: ${why}`),
+      onMessage: (e, stored) =>
+        console.log(`[notify] ${stored ? "•" : "dup"} ${e.type}: ${e.title}`),
+      onError: (msg) => console.error(`[notify] error: ${msg}`),
+    });
+    console.log("listener stopped");
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
+/** Assemble a ListenerConfig from env (+ --channel overrides), or return a guidance string. */
+function notifyConfigFromEnv(channelOverride: string[]): ListenerConfig | string {
+  const url = process.env.INVOKER_NOTIFY_URL;
+  const host = process.env.INVOKER_NOTIFY_HOST;
+  const appKey = process.env.INVOKER_NOTIFY_KEY;
+  if (!url && (!host || !appKey)) {
+    return "set INVOKER_NOTIFY_HOST + INVOKER_NOTIFY_KEY (or INVOKER_NOTIFY_URL)";
+  }
+  const channels = channelOverride.length
+    ? channelOverride
+    : (process.env.INVOKER_NOTIFY_CHANNELS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (channels.length === 0) return "no channels: set INVOKER_NOTIFY_CHANNELS or pass --channel";
+
+  const tokenRef = process.env.INVOKER_NOTIFY_TOKEN_REF;
+  const portStr = process.env.INVOKER_NOTIFY_PORT;
+  return {
+    url,
+    host: host ?? "",
+    port: portStr ? Number(portStr) : undefined,
+    scheme: (process.env.INVOKER_NOTIFY_SCHEME as "ws" | "wss") ?? "wss",
+    appKey: appKey ?? "",
+    channels,
+    authToken: tokenRef ? resolveSecret(tokenRef) : undefined,
+  };
+}
+
 /** invoker tick — run every job that is due now under its missed-run policy. */
 async function cmdTick(_args: string[]): Promise<number> {
   const store = new Store(WORKSPACE);
@@ -624,6 +765,15 @@ function optValue(args: string[], flag: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
+/** Every value of a repeatable flag, e.g. `--channel a --channel b` → ["a", "b"]. */
+function collectAll(args: string[], flag: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === flag && args[i + 1] !== undefined) out.push(args[i + 1]!);
+  }
+  return out;
+}
+
 function usage(code = 0): number {
   console.log(
     [
@@ -646,6 +796,11 @@ function usage(code = 0): number {
       "  invoker schedule edit <id> --cron \"<expr>\" [--policy ...] [--max-lag ms] [--name <n>]",
       "",
       "  invoker daemon <run|start|stop|status>        persistent scheduler (tick loop)",
+      "",
+      "  invoker notifications list [--unread] [--json]  NotificationCenter: unread count + items",
+      "  invoker notifications read <id|--all>          mark read",
+      "  invoker notifications listen [--channel <c>]   outbound Reverb/Pusher listener (env-configured)",
+      "",
       "  invoker doctor [--strict]                     read-only health sweep (--strict: warnings fail)",
       "",
       "  (mcp, ws, tauri transports: see ARCHITECTURE.md roadmap)",

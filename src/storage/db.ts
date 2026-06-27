@@ -2,9 +2,11 @@ import { Database } from "bun:sqlite";
 import { join, dirname } from "node:path";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import type { Artifact } from "../abi/index.ts";
 import type { SchedulePolicy, ScheduledJob, SchedulerState } from "../core/scheduler.ts";
 import type { PipelineStep } from "../core/pipeline.ts";
+import type { NotificationEvent } from "../core/notifications.ts";
 
 export interface RunRecord {
   id: string;
@@ -57,6 +59,17 @@ export interface ScheduleRow {
   lastStatus?: "pending" | "running" | "completed" | "failed";
   lastDurationMs?: number;
   lastCacheHit?: boolean;
+}
+
+/** A persisted notification — a received NotificationEvent plus its local id and read state. */
+export interface NotificationRecord {
+  id: string;
+  eventId: string;
+  title: string;
+  body: string;
+  type: string;
+  receivedAt: number;
+  readAt?: number;
 }
 
 const SCHEMA_PATH = join(dirname(fileURLToPath(import.meta.url)), "schema.sql");
@@ -283,6 +296,62 @@ export class Store {
       });
   }
 
+  // --- notifications (v0.2) ------------------------------------------------
+
+  /**
+   * Persist a received notification. Dedup is the listener's only correctness property: an
+   * `INSERT OR IGNORE` against `UNIQUE(event_id)` makes re-delivery idempotent. Returns true when
+   * a new row was written, false when it deduped against an event already seen.
+   */
+  recordNotification(e: NotificationEvent): boolean {
+    const r = this.db
+      .query(
+        `INSERT OR IGNORE INTO notifications (id, event_id, title, body, type, received_at)
+         VALUES ($id, $eventId, $title, $body, $type, $receivedAt)`,
+      )
+      .run({
+        $id: randomUUID(),
+        $eventId: e.eventId,
+        $title: e.title,
+        $body: e.body,
+        $type: e.type,
+        $receivedAt: e.receivedAt,
+      });
+    return r.changes > 0;
+  }
+
+  /** Notifications newest-first; `unreadOnly` restricts to unread. */
+  listNotifications(opts: { unreadOnly?: boolean; limit?: number } = {}): NotificationRecord[] {
+    const where = opts.unreadOnly ? "WHERE read_at IS NULL" : "";
+    const rows = this.db
+      .query(`SELECT * FROM notifications ${where} ORDER BY received_at DESC, id LIMIT ?`)
+      .all(opts.limit ?? 50) as Record<string, unknown>[];
+    return rows.map(rowToNotification);
+  }
+
+  unreadNotificationCount(): number {
+    const row = this.db
+      .query("SELECT COUNT(*) AS n FROM notifications WHERE read_at IS NULL")
+      .get() as { n: number };
+    return Number(row.n);
+  }
+
+  /** Mark one notification read. Returns false if it doesn't exist or was already read. */
+  markNotificationRead(id: string, now = Date.now()): boolean {
+    const r = this.db
+      .query("UPDATE notifications SET read_at = $now WHERE id = $id AND read_at IS NULL")
+      .run({ $id: id, $now: now });
+    return r.changes > 0;
+  }
+
+  /** Mark every unread notification read. Returns how many were affected. */
+  markAllNotificationsRead(now = Date.now()): number {
+    const r = this.db
+      .query("UPDATE notifications SET read_at = $now WHERE read_at IS NULL")
+      .run({ $now: now });
+    return r.changes;
+  }
+
   // --- daemon heartbeat (P2) ----------------------------------------------
 
   setDaemonHeartbeat(hb: DaemonHeartbeat): void {
@@ -369,6 +438,18 @@ function rowToJob(r: Record<string, unknown>): ScheduledJob {
     policy: String(r.policy) as SchedulePolicy,
     maxLagMs: Number(r.max_lag_ms),
     enabled: Number(r.enabled) === 1,
+  };
+}
+
+function rowToNotification(r: Record<string, unknown>): NotificationRecord {
+  return {
+    id: String(r.id),
+    eventId: String(r.event_id),
+    title: String(r.title),
+    body: String(r.body),
+    type: String(r.type),
+    receivedAt: Number(r.received_at),
+    readAt: r.read_at == null ? undefined : Number(r.read_at),
   };
 }
 
