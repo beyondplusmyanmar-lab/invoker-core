@@ -18,6 +18,7 @@ import { SchedulePolicy, type ScheduledJob } from "../../core/scheduler.ts";
 import { importJobSpec } from "../../core/jobspec.ts";
 import { runListener } from "../../core/notification-listener.ts";
 import type { ListenerConfig } from "../../core/notifications.ts";
+import { BusinessAIClient, FetchChatTransport } from "../../core/businessai.ts";
 import { resolveSecret } from "../../core/secrets.ts";
 import { assertDeterministic } from "../../engines/conformance.ts";
 import {
@@ -65,6 +66,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdRuns(rest);
     case "notifications":
       return cmdNotifications(rest);
+    case "chat":
+      return cmdChat(rest);
     case "tick":
       return cmdTick(rest);
     case "daemon":
@@ -556,6 +559,53 @@ function notifyConfigFromEnv(channelOverride: string[]): ListenerConfig | string
   };
 }
 
+/**
+ * invoker chat <message> [--meta] — one BusinessAI turn, streamed to stdout. A pure consumer:
+ * tokens print as they arrive, done ends the turn. `--meta` surfaces opaque backend control events
+ * (delegate/route/handoff/…) for inspection only — the runtime never acts on them.
+ *   INVOKER_AI_URL = chat endpoint (text/event-stream)   [INVOKER_AI_TOKEN_REF = secret ref]
+ */
+async function cmdChat(args: string[]): Promise<number> {
+  const showMeta = args.includes("--meta");
+  const message = args.filter((a) => !a.startsWith("--")).join(" ").trim();
+  if (!message) {
+    console.error("usage: invoker chat <message> [--meta]");
+    return 1;
+  }
+  const url = process.env.INVOKER_AI_URL;
+  if (!url) {
+    console.error("cannot chat: set INVOKER_AI_URL (BusinessAI chat endpoint)");
+    return 1;
+  }
+  const tokenRef = process.env.INVOKER_AI_TOKEN_REF;
+  const transport = new FetchChatTransport({
+    url,
+    authToken: tokenRef ? resolveSecret(tokenRef) : undefined,
+  });
+
+  let failed = false;
+  const client = new BusinessAIClient(transport, {
+    onConnected: () => process.stderr.write("[ai] connected\n"),
+    onToken: (t) => process.stdout.write(t),
+    onDone: () => process.stdout.write("\n"),
+    onError: (m) => {
+      failed = true;
+      process.stderr.write(`\n[ai] error: ${m}\n`);
+    },
+    onMeta: (ev, data) => {
+      if (showMeta) process.stderr.write(`[ai:meta] ${ev} ${data}\n`);
+    },
+  });
+
+  const stop = () => client.disconnect();
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+
+  client.connect();
+  await client.send(message);
+  return failed ? 1 : 0;
+}
+
 /** invoker tick — run every job that is due now under its missed-run policy. */
 async function cmdTick(_args: string[]): Promise<number> {
   const store = new Store(WORKSPACE);
@@ -800,6 +850,8 @@ function usage(code = 0): number {
       "  invoker notifications list [--unread] [--json]  NotificationCenter: unread count + items",
       "  invoker notifications read <id|--all>          mark read",
       "  invoker notifications listen [--channel <c>]   outbound Reverb/Pusher listener (env-configured)",
+      "",
+      "  invoker chat <message> [--meta]               one BusinessAI turn, streamed (env-configured)",
       "",
       "  invoker doctor [--strict]                     read-only health sweep (--strict: warnings fail)",
       "",
