@@ -10,6 +10,7 @@ import { registry } from "../../core/registry.ts";
 import { invoke } from "../../core/invoke.ts";
 import { Store } from "../../storage/db.ts";
 import { excelRender } from "../../engines/excel/index.ts";
+import { docxRender } from "../../engines/docx/index.ts";
 import { tabularMap } from "../../engines/tabular/index.ts";
 import { HttpFetchProvider, RoutingFetchProvider } from "../../core/fetch.ts";
 import { runJob, dueJobs } from "../../core/runner.ts";
@@ -33,7 +34,7 @@ const WORKSPACE = process.env.INVOKER_HOME ?? join(homedir(), ".invoker");
 
 // Built-in engines register here. Domain capabilities arrive via plugins (ADR-001/008).
 function bootstrap(): void {
-  for (const cap of [tabularMap, excelRender]) {
+  for (const cap of [tabularMap, excelRender, docxRender]) {
     if (!registry.has(cap.id, cap.contractVersion)) registry.register(cap);
   }
 }

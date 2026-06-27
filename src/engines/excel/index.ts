@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { unzipSync, zipSync } from "fflate";
+import { normalizeZip } from "../ooxml.ts";
 import type { ArtifactOutput, Capability, Column, InvokeContext, TableModel } from "../../abi/index.ts";
 
 export const ENGINE_VERSION = "1.2.0";
@@ -35,20 +35,6 @@ export async function renderWorkbook(input: unknown): Promise<Uint8Array> {
 
   const raw = new Uint8Array(await wb.xlsx.writeBuffer());
   return normalizeZip(raw);
-}
-
-// The ZIP format's epoch is 1980-01-01; fflate rejects earlier mtimes. Pin every entry here.
-const FIXED_MTIME = new Date("1980-01-01T00:00:00Z");
-
-/** Re-emit a zip with deterministic entry order and a fixed mtime. */
-function normalizeZip(bytes: Uint8Array): Uint8Array {
-  const entries = unzipSync(bytes);
-  const sorted: Record<string, [Uint8Array, { mtime: Date; level: 6 }]> = {};
-  for (const name of Object.keys(entries).sort()) {
-    // fflate writes entries in insertion order → sorted insertion gives a stable layout.
-    sorted[name] = [entries[name]!, { mtime: FIXED_MTIME, level: 6 }];
-  }
-  return zipSync(sorted, { mtime: FIXED_MTIME });
 }
 
 function asTableModel(input: unknown): TableModel {

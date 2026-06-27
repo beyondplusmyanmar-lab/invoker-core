@@ -37,6 +37,7 @@ export type {
   LoadedTemplate,
 } from "./providers/index.ts";
 export { excelRender, renderWorkbook } from "./engines/excel/index.ts";
+export { docxRender, renderDocument } from "./engines/docx/index.ts";
 export { tabularMap, mapToTable, resolvePath, coerce } from "./engines/tabular/index.ts";
 export type { Mapping, MappingColumn } from "./engines/tabular/index.ts";
 export { assertDeterministic } from "./engines/conformance.ts";
