@@ -31,6 +31,31 @@ placement · replay · leases · epochs · relay · P3
 - No known gate failures.
 - Awaiting first morning ledger row.
 
+## Optional: Standalone Binary
+
+The pilot can run from source (`bun run …`, or `bun link` to get an `invoker`
+command). To remove Bun as a dependency on the operator's laptop, build one
+self-contained binary instead:
+
+```bash
+bun build ./src/transports/cli/index.ts --compile --outfile invoker
+./invoker init
+./invoker doctor
+```
+
+The standalone binary embeds the runtime and schema — **Bun is not required on
+the pilot laptop.** All three execution modes behave equivalently: `bun run`,
+the compiled binary, and a future package install.
+
+## Pilot Contract: What Counts as a Report
+
+The gates evaluate reports produced through the **report/job path** — a
+`run`, a scheduled cron tick, or a UI run — each of which writes a manifest.
+An ad-hoc `invoker invoke <capability>` produces a valid artifact but **no
+manifest**, so `doctor`'s "latest report verifies" check will read FAIL. That
+is expected, not a gate failure. During the pilot, exercise reports via jobs,
+not bare `invoke`.
+
 ## Start Sequence (Day 1, on the laptop)
 
 ```bash
