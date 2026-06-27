@@ -57,6 +57,37 @@ After this there is intentionally nothing to engineer. For seven days:
 3. Archive any gate-failing snapshot.
 4. Apply the smallest bug fix **only** if a gate fails.
 
+## What the Pilot Measures
+
+The pilot validates the **runtime workspace**, not the repository. The repo
+carries only the protocol and tooling; the workspace (default `~/.invoker/`,
+or `$INVOKER_HOME`) holds everything under test:
+
+```
+~/.invoker/
+├── invoker.sqlite          # jobs · runs · artifact index · notifications · heartbeats
+│   (+ invoker.sqlite-wal / -shm during active use)
+├── daemon.lock             # present only while the daemon is running (RSS sample reads its pid)
+├── invoker.log             # lifecycle timeline (rolling, size-capped)
+└── artifacts/
+    ├── *.xlsx · *.docx      # the reports
+    └── *.manifest.json      # tamper-evident sidecars
+```
+
+Notifications are **rows in `invoker.sqlite`**, not a `notifications/` folder;
+the support bundle surfaces them as `notifications.json`.
+
+Each `scripts/pilot-collect` run produces:
+
+```
+pilot/<YYYYMMDD-HHMMSS>/
+├── doctor.json · health.json · rss.txt · meta.txt · notes.txt
+└── support/
+    └── support-<YYYYMMDD>.zip
+```
+
+`pilot/` is git-ignored and never committed.
+
 ## Day 7 Review
 
 Evidence-driven, from the ledger + snapshots + bundles + operator comments:
