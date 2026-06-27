@@ -1,132 +1,158 @@
-# Invoker v0.2.0-rc1 Pilot
+# Invoker v0.2.0-rc1 Pilot Protocol
 
 **Status:** Experimental
-**Duration:** 7 consecutive days
-**Scope:** 1 shop · 1 laptop · 1 operator
 
-This is an experiment, not normal usage. The question is no longer "what
-capabilities do we need?" but "which assumptions survive contact with a real
-branch manager for seven days?" The most valuable output is a completed ledger,
-not another commit.
+## Purpose
 
-The single claim under test:
+Validate one claim:
 
-> Even if the server is unavailable, yesterday's report is still on this laptop,
-> and the application can prove it.
+> If the server disappears, yesterday's report is still present on the laptop,
+> and the application can prove that it is authentic.
+
+## Duration
+
+7 consecutive days.
+
+## Scope
+
+- 1 shop
+- 1 laptop
+- 1 operator
+
+## Posture
+
+Experiment, not product rollout. Operational evidence outranks feature work.
 
 ## Freeze Policy
 
 **Allowed**
-- bug fixes (only if a gate fails)
+- bug fixes
 - observability improvements
 - pilot documentation
+- support tooling
+- incident analysis
 
 **Forbidden**
 - multi-device · placement · leases · epochs · replay · guaranteed notifications
-- relay · P3 · Tauri · mobile · plugin system · workflow designer
+- relay · P3 · Tauri · mobile · plugin system · workflow designer · marketplace
 - rc2 features (Chat page, Settings page)
 
-rc2 stays frozen until the pilot reports. A pass turns rc2 into a *product*
-exercise; it is not unfrozen by impatience.
+## Pilot Gates
 
-## Success Criteria
+| Gate | Target | Instrument |
+|------|--------|------------|
+| Uptime | >= 7 days | `doctor --pilot` |
+| Duplicate renders | 0 | `doctor --pilot` |
+| Corrupt artifacts | 0 | `artifact verify` + `doctor` |
+| Missed cron reports | 0 | `doctor --pilot` |
+| SQLite recovery failures | 0 | `doctor --pilot` |
+| Disk exhaustion | 0 | `health --json` |
+| Operator confusion incidents | 0 | ledger |
+| Memory growth | bounded | RSS sample |
 
-| Gate | Target | Instrument | Result |
-|------|--------|------------|--------|
-| Uptime | >= 7 days | `doctor --pilot` | |
-| Duplicate renders | 0 | `doctor --pilot` | |
-| Corrupt artifacts | 0 | `doctor --pilot` (verify sweep) | |
-| Missed cron reports | 0 | `doctor --pilot` | |
-| SQLite recovery failures | 0 | `doctor --pilot` | |
-| Disk exhaustion | 0 | `health --json` + retention | |
-| Operator confusion incidents | <= 2 | **ledger (human only)** | |
-| Memory growth | bounded | **RSS sample (external)** | |
+## Success Conditions
 
-**Instrument honesty.** The first six gates are read from durable state by the
-tooling. The last two have **no sensor in the runtime** — operator confusion is
-visible only in the ledger's comments, and memory growth only in the daily RSS
-sample. An empty ledger is not a green gate; it is a missing measurement.
+**PASS** — all gates green.
+
+**PARTIAL** — no data loss; one or more usability issues; no architectural
+assumptions invalidated.
+
+**FAIL** — any of: corrupt artifact · duplicate render escaping the coordinator ·
+missed report · SQLite unrecoverable · disk exhaustion · unbounded daemon growth ·
+operator unable to complete the morning workflow.
 
 ## Morning Checklist
 
-Run once each morning. The `pilot-collect` script does all of this in one step
-(preferred); the manual equivalent is below.
+Run once every morning:
 
 ```bash
-scripts/pilot-collect          # writes pilot/<timestamp>/ with everything below
+scripts/pilot-collect
 ```
 
-Manual equivalent:
+Verify the snapshot was created, then review: `doctor.json`, `health.json`,
+`rss.txt`, and the support bundle.
 
-```bash
-invoker doctor --pilot --json  > doctor.json
-invoker health --json          > health.json   # carries the running version
-invoker support bundle --out support/
+### RSS Sampling
 
-# RSS sample — read the daemon's PID from its own lockfile (authoritative),
-# not from a process-name grep.
-WS="${INVOKER_HOME:-$HOME/.invoker}"
-PID=$(grep -o '"pid":[0-9]*' "$WS/daemon.lock" 2>/dev/null | grep -o '[0-9]*' || true)
-[ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && ps -o pid,rss,vsz,etime,command -p "$PID" > rss.txt
+The daemon PID is obtained from the runtime lockfile. The collector records:
+PID, RSS, VSZ, elapsed time, and command line.
 
-# Build identity — version from the health snapshot, exact build from git.
-grep -m1 '"version"' health.json            # e.g. "version": "0.2.0-rc1"
-git rev-parse HEAD 2>/dev/null || true       # distinguishes rc1 from a hotfix build
-```
+## Ledger
 
-Then record the headline numbers in the ledger.
-
-## Operator Ledger
-
-One row per day. Keep it in this file or a spreadsheet — it is the primary
-artifact of the pilot.
+One row per day.
 
 ```
 Date:
 Operator:
 Morning snapshot completed: [ ]
 
-Version:                 (from health.json)
-Build (git HEAD):        (rc1 = dddfc71's commit, or a hotfix sha)
-Doctor:                  PASS / FAIL
-Health:                  OK / WARN
+Doctor:               PASS / FAIL
+Health:               OK / WARN
+Version:
+Git head:
 RSS (KB):
 Duplicate renders:
+Corrupt artifacts:
 Missed schedules:
+SQLite recoveries:
 Disk used:
+Cleanup usage:
 
 Notes:
 ```
 
-### Operator Comments (free-form — watch this most closely)
+### Operator Comments
 
-Technically robust systems usually fail at operator confusion first. Capture
-verbatim what the manager says and does. Examples worth noticing:
+Free-form observations. Examples:
 
-- "I couldn't find yesterday's report" — did they know *where* artifacts land?
-- Clicked **Run** twice — repeated manual reruns (the coordinator collapses
-  them, but the *expectation* is the signal).
-- "Didn't understand the Verify shield" — is `✓ Verified` legible as a promise?
-- "Notification wording confusing" — and did they expect notifications to
-  **replay**? They don't: the listener re-establishes live, by design.
-- Did they know the **support bundle** exists when something looked wrong?
+- "I couldn't find yesterday's report"
+- "I clicked Run twice"
+- "I didn't understand Verify"
+- "I expected notifications to stay"
+- "I wasn't sure if the schedule was enabled"
 
 ## Incident Procedure
 
 If any gate fails:
 
-1. `invoker support bundle` immediately; archive the bundle.
-2. Attach it to an issue with the failing gate named.
-3. **Do not add features.** Root-cause, then a minimal fix.
-4. Restart the 7-day clock only if the failure invalidates the results so far.
+1. **Do not add features.**
+2. Run `scripts/pilot-collect`.
+3. Archive the produced snapshot directory.
+4. Attach the snapshot to the issue.
+5. Root-cause the failure.
+6. Apply the smallest fix possible.
+7. Decide whether the pilot clock resets.
 
-## Exit Outcomes
+## Support Bundle
 
-- **PASS** — all gates green for 7 days → v0.2.x is operationally validated for
-  the single-shop / single-device regime; rc2 becomes product work.
-- **PARTIAL** — only UI friction, doctor-message tuning, or support-bundle
-  additions requested → small v0.2.x improvements, still not systems design.
-- **FAIL** — reports disappear, artifacts corrupt, schedules drift, coordinator
-  collapse misbehaves, retention removes the wrong artifacts, or SQLite damage
-  is observed → the failing gate is the next engineering task, now backed by
-  evidence instead of speculation.
+Expected contents of `support-YYYYMMDD.zip`:
+
+```
+artifacts/latest.manifest.json
+config.redacted.json
+doctor.json
+health.json
+logs/last100.log
+notifications.json
+runs.json
+schedules.json
+sqlite.db
+```
+
+## Build Identity
+
+Pilot snapshots record `version`, `git_head`, and the collection timestamp.
+
+The collector tolerates doctor failures: a failing gate must never prevent
+snapshot collection.
+
+## Exit Criteria
+
+At the end of Day 7, review the ledger, the pilot snapshots, the support
+bundles, and the operator comments, then decide:
+
+- unfreeze rc2
+- extend the pilot
+- fix a failing gate
+
+**No rc2 work begins before this review.**
