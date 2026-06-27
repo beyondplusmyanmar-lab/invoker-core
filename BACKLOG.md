@@ -79,17 +79,24 @@ not_in = ["voided"]
 
 ## P1 — Secret-reference management in the UI
 
-**Hard invariant across every phase:** the UI never receives, reveals, edits, or
-stores a secret *value* — only the *reference string* + status metadata. No
-reveal button, no copy button, no plaintext storage, no DB row, no support-bundle
-inclusion. The browser sees `{ "reference": "keychain:doeh/api", "status": "ok" }`,
-never `{ "secret": "sk_…" }`.
+**Invariant (the reviewer rule):**
 
-| Phase | UI capability | Notes |
-|-------|---------------|-------|
-| rc1 (now) | **none needed** | already covered by the CLI — see below |
-| rc2 | edit the **reference string** + Test | never the value |
-| v0.3 | credentials dashboard | per-source status metadata only |
+> The UI MAY transport, store, and display a **SecretRef**.
+> The UI MAY NEVER transport, store, display, copy, reveal, or persist a **SecretValue**.
+
+A `SecretRef` is `keychain:doeh/api` / `env:…` / `file:…` / `exec:…`. A `SecretValue`
+is the resolved token behind it (`sk_…`, a bearer, the file bytes). This is a flat
+rule, not a case-by-case judgement — a PR proposing "add a Show Token button" is
+rejected on sight because it transports a `SecretValue`. The browser ever sees only
+`{ "reference": "keychain:doeh/api", "status": "ok" }`, never `{ "secret": "sk_…" }`:
+no reveal, no copy, no plaintext, no DB row, no support-bundle inclusion of a value.
+
+| Phase | Capability | Notes |
+|-------|-----------|-------|
+| rc1 (now) | `doctor` + support bundle | **already shipped** |
+| rc2 | reference editor + Test button | reuses `resolveSecret()` reject + `testFetch()` |
+| rc2.1 | persist credential health | `last_success` / `last_failure` / `error` / `updated_at` |
+| v0.3 | credentials dashboard | read-only view over the rc2.1 persisted state |
 
 **rc1 — already met, no build.** `doctor`'s Secrets check resolves the configured
 `INVOKER_TOKEN_REF` and reports `token ref resolves (keychain:…)` — only the scheme
@@ -106,10 +113,17 @@ for each source and validates it server-side, reusing what already exists:
 scheme check + a `testFetch`. Accept `env:`/`file:`/`keychain:`/`exec:`; reject any
 literal token or `Bearer …`. The POST body carries the reference, never a value.
 
-**v0.3 — credentials dashboard.** Per source (DOEH / BusinessAI / Notifications):
-reference, resolver, last_success, last_failure, error. `credential_status`
-metadata only — same invariant: no reveal, no copy, no plaintext, no persistence
-of the value.
+**rc2.1 — persist credential health.** The durable instrumentation a dashboard
+needs, and the reason a "view-only card" is NOT rc1: a `credential_status` row per
+source (`reference`, `last_success`, `last_failure`, `error`, `updated_at`), written
+when a resolve/fetch actually happens. Without it a card would either re-resolve on
+every page refresh or show synthetic data — neither acceptable in a freeze. Stores
+status, never the value.
+
+**v0.3 — credentials dashboard.** A read-only view over the rc2.1 state. Per source
+(DOEH / BusinessAI / Notifications): reference, resolver, last_success, last_failure,
+error. `credential_status` metadata only — the invariant holds: no reveal, no copy,
+no plaintext, no persistence of the value.
 
 ## Gating principle
 
