@@ -21,6 +21,7 @@ import { importJobSpec } from "../../core/jobspec.ts";
 import { runListener } from "../../core/notification-listener.ts";
 import type { ListenerConfig } from "../../core/notifications.ts";
 import { BusinessAIClient, FetchChatTransport } from "../../core/businessai.ts";
+import { verifyArtifact } from "../../core/verify.ts";
 import { resolveSecret } from "../../core/secrets.ts";
 import { assertDeterministic } from "../../engines/conformance.ts";
 import {
@@ -66,6 +67,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdRun(rest);
     case "runs":
       return cmdRuns(rest);
+    case "artifact":
+      return cmdArtifact(rest);
     case "notifications":
       return cmdNotifications(rest);
     case "chat":
@@ -610,6 +613,44 @@ async function cmdChat(args: string[]): Promise<number> {
   return failed ? 1 : 0;
 }
 
+/**
+ * invoker artifact verify <sha> [--json] — prove a report is intact from the filesystem alone.
+ * The integrity chain (bytes → DB row → manifest sidecar) must agree end to end; exit 1 on any fail.
+ */
+function cmdArtifact(args: string[]): number {
+  if (args[0] !== "verify" || !args[1]) {
+    console.error("usage: invoker artifact verify <sha> [--json]");
+    return 1;
+  }
+  const sha = args[1];
+  const store = new Store(WORKSPACE);
+  try {
+    const report = verifyArtifact(store, sha);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(report, null, 2));
+      return report.ok ? 0 : 1;
+    }
+    if (!report.found) {
+      console.error(`no artifact matching sha ${sha}`);
+      return 1;
+    }
+    console.log(`artifact   ${report.artifact}`);
+    console.log(`sha256     ${report.meta.sha256}`);
+    console.log("");
+    for (const c of report.checks) {
+      console.log(`${c.ok ? "✓" : "✗"} ${c.name.padEnd(14)} ${c.detail}`);
+    }
+    console.log("");
+    for (const [k, v] of Object.entries(report.meta)) {
+      if (k !== "sha256") console.log(`${k.padEnd(10)} ${v}`);
+    }
+    if (!report.ok) console.log(`\nverification FAILED: ${report.checks.filter((c) => !c.ok).map((c) => c.name).join(", ")}`);
+    return report.ok ? 0 : 1;
+  } finally {
+    store.close();
+  }
+}
+
 /** invoker tick — run every job that is due now under its missed-run policy. */
 async function cmdTick(_args: string[]): Promise<number> {
   const store = new Store(WORKSPACE);
@@ -878,6 +919,8 @@ function usage(code = 0): number {
       "  invoker notifications listen [--channel <c>]   outbound Reverb/Pusher listener (env-configured)",
       "",
       "  invoker chat <message> [--meta]               one BusinessAI turn, streamed (env-configured)",
+      "",
+      "  invoker artifact verify <sha> [--json]        prove an artifact is intact (bytes↔db↔manifest)",
       "",
       "  invoker doctor [--strict]                     read-only health sweep (--strict: warnings fail)",
       "",

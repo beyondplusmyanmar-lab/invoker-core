@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS runs (
   artifact_sha256 TEXT,
   artifact_path   TEXT,
   artifact_type   TEXT,
-  artifact_size   INTEGER
+  artifact_size   INTEGER,
+  -- sha256 of the manifest sidecar's own bytes, so `artifact verify` can detect sidecar tampering.
+  manifest_sha256 TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs (started_at DESC);
 

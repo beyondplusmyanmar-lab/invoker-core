@@ -3,6 +3,7 @@ import { join, dirname } from "node:path";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { sha256Hex } from "../core/hash.ts";
 import type { Artifact } from "../abi/index.ts";
 import type { SchedulePolicy, ScheduledJob, SchedulerState } from "../core/scheduler.ts";
 import type { PipelineStep } from "../core/pipeline.ts";
@@ -103,6 +104,7 @@ export class Store {
       "ALTER TABLE runs ADD COLUMN artifact_path TEXT",
       "ALTER TABLE runs ADD COLUMN artifact_type TEXT",
       "ALTER TABLE runs ADD COLUMN artifact_size INTEGER",
+      "ALTER TABLE runs ADD COLUMN manifest_sha256 TEXT",
     ];
     for (const sql of additions) {
       try {
@@ -264,10 +266,39 @@ export class Store {
   }
 
   /** Write a self-describing manifest sidecar next to an artifact (survives without the DB). */
-  writeManifest(id: string, manifest: Record<string, unknown>): string {
-    const path = join(this.artifactsDir, `${id}.manifest.json`);
-    writeFileSync(path, JSON.stringify(manifest, null, 2));
+  writeManifest(runId: string, manifest: Record<string, unknown>): string {
+    const path = join(this.artifactsDir, `${runId}.manifest.json`);
+    const bytes = new TextEncoder().encode(JSON.stringify(manifest, null, 2));
+    writeFileSync(path, bytes);
+    // Fingerprint the sidecar's own bytes so `artifact verify` can detect manifest tampering.
+    this.db
+      .query("UPDATE runs SET manifest_sha256 = $h WHERE id = $id")
+      .run({ $h: sha256Hex(bytes), $id: runId });
     return path;
+  }
+
+  /** Path of a run's manifest sidecar (exists only for runs whose leader actually rendered). */
+  manifestPath(runId: string): string {
+    return join(this.artifactsDir, `${runId}.manifest.json`);
+  }
+
+  /** Find an artifact by full sha256 or a shorthand prefix (newest wins on an ambiguous prefix). */
+  findArtifactBySha(shaPrefix: string): Artifact | undefined {
+    const row = this.db
+      .query("SELECT * FROM artifacts WHERE artifact_sha256 LIKE ? ORDER BY created_at DESC LIMIT 1")
+      .get(`${shaPrefix}%`) as Record<string, unknown> | null;
+    return row ? rowToArtifact(row) : undefined;
+  }
+
+  /** Runs that produced/served a given artifact sha, newest-first, with each one's manifest hash. */
+  runsForArtifactSha(sha: string): { id: string; manifestSha256?: string }[] {
+    const rows = this.db
+      .query("SELECT id, manifest_sha256 FROM runs WHERE artifact_sha256 = ? ORDER BY started_at DESC")
+      .all(sha) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: String(r.id),
+      manifestSha256: r.manifest_sha256 == null ? undefined : String(r.manifest_sha256),
+    }));
   }
 
   // --- scheduler state -----------------------------------------------------

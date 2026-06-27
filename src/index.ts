@@ -34,6 +34,8 @@ export { parseSseBuffer, consumeSse } from "./core/sse.ts";
 export type { SseEvent } from "./core/sse.ts";
 export { toChatEvent, BusinessAIClient, FetchChatTransport } from "./core/businessai.ts";
 export type { ChatEvent, ChatHandlers, ChatTransport, BusinessAIConfig } from "./core/businessai.ts";
+export { verifyArtifact, buildVerifyReport, checkOoxml } from "./core/verify.ts";
+export type { VerifyReport, VerifyCheck, ManifestSidecar } from "./core/verify.ts";
 export { SchedulePolicy, decideRun } from "./core/scheduler.ts";
 export type { ScheduledJob, SchedulerState } from "./core/scheduler.ts";
 export {
