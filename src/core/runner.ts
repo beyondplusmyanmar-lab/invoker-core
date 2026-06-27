@@ -10,6 +10,22 @@ import { sha256Hex, jsonHash } from "./hash.ts";
 import { enforceInputLimits, DEFAULT_LIMITS, type Limits } from "./limits.ts";
 import type { ExecutionCoordinator } from "./execution.ts";
 
+/**
+ * The timezone the scheduler evaluates crons in. It MUST be stable for the life of the process,
+ * which is why it is captured here at module load — before any render runs. `renderWorkbook`
+ * permanently sets `process.env.TZ = "UTC"` for artifact determinism (ADR-007); croner reads the
+ * ambient zone, so without pinning it explicitly that mutation leaks into scheduling and shifts
+ * every cron by the local UTC offset after the first render (a 6am report drifts to 6am UTC).
+ * Default = the system zone, so "0 6 * * *" means 6am shop-local; INVOKER_TZ overrides it.
+ */
+export const SCHEDULER_TZ =
+  process.env.INVOKER_TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
+
+/** A croner instance pinned to the scheduler zone — immune to the render's process-wide TZ pin. */
+export function newCron(expr: string, tz: string = SCHEDULER_TZ): Cron {
+  return new Cron(expr, { timezone: tz });
+}
+
 /** Runtime protections threaded into a job run (E1). Both optional and backward-compatible. */
 export interface RunJobOptions {
   /** Collapses concurrent identical runs onto one render; bounds concurrency + duration. */
@@ -180,9 +196,9 @@ export function previousTick(cron: Cron, lowerBoundMs: number, now: number): num
  * Returns null for a manual (empty) cron. Unlike `previousTick` this is what croner answers
  * natively, so it's a thin wrapper that also guards the manual case.
  */
-export function nextTick(cron: string, now = Date.now()): number | null {
+export function nextTick(cron: string, now = Date.now(), tz: string = SCHEDULER_TZ): number | null {
   if (!cron) return null;
-  const t = new Cron(cron).nextRun(new Date(now));
+  const t = newCron(cron, tz).nextRun(new Date(now));
   return t ? t.getTime() : null;
 }
 
@@ -194,7 +210,7 @@ export function dueJobs(jobs: ScheduledJob[], store: Store, now = Date.now()): S
     // Anchor at the last run if known; otherwise look back a bounded window so a
     // never-run job still sees a recently-elapsed tick (bounds the forward walk).
     const lowerBound = state.lastRunAt ?? now - Math.max(job.maxLagMs, DAY_MS);
-    const prevTick = previousTick(new Cron(job.cron), lowerBound, now);
+    const prevTick = previousTick(newCron(job.cron), lowerBound, now);
     return decideRun(job, prevTick, state, now).run;
   });
 }

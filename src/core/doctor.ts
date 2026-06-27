@@ -6,7 +6,6 @@
 // Three modes (the CLI picks): default (FAIL only on a hard fault), --strict (warnings fail too),
 // --pilot (check the actual 7-day pilot gates).
 
-import { Cron } from "croner";
 import { writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Store } from "../storage/db.ts";
@@ -17,7 +16,7 @@ import { assertDeterministic } from "../engines/conformance.ts";
 import { resolveSecret } from "./secrets.ts";
 import { verifyArtifact } from "./verify.ts";
 import { freeDiskBytes } from "./health.ts";
-import { previousTick } from "./runner.ts";
+import { previousTick, newCron } from "./runner.ts";
 import { readLock, isAlive } from "./daemon.ts";
 
 export type CheckStatus = "ok" | "warn" | "fail";
@@ -264,7 +263,7 @@ function countMissedSchedules(deps: DoctorDeps, now: number): number {
     if (!job.enabled || !job.cron || !validCron(job.cron)) continue;
     const state = deps.store.getSchedulerState(job.id);
     const lowerBound = state.lastRunAt ?? now - Math.max(job.maxLagMs, DAY_MS);
-    const prevTick = previousTick(new Cron(job.cron), lowerBound, now);
+    const prevTick = previousTick(newCron(job.cron), lowerBound, now);
     if (prevTick == null) continue;
     const ranThisTick = state.lastRunAt != null && state.lastRunAt >= prevTick;
     if (!ranThisTick && now - prevTick > MISS_GRACE_MS) missed++;
@@ -285,7 +284,7 @@ export function gteVersion(a: string, b: string): boolean {
 
 function validCron(expr: string): boolean {
   try {
-    new Cron(expr);
+    newCron(expr);
     return true;
   } catch {
     return false;
