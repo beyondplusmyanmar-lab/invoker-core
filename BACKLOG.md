@@ -77,6 +77,40 @@ not_in = ["voided"]
 | Declarative row filtering | structured predicates only (e.g. `not_in`, `equals`, `in`) |
 | Excel autofilter / freeze panes | nice-to-have; emitter-level, no policy |
 
+## P1 — Secret-reference management in the UI
+
+**Hard invariant across every phase:** the UI never receives, reveals, edits, or
+stores a secret *value* — only the *reference string* + status metadata. No
+reveal button, no copy button, no plaintext storage, no DB row, no support-bundle
+inclusion. The browser sees `{ "reference": "keychain:doeh/api", "status": "ok" }`,
+never `{ "secret": "sk_…" }`.
+
+| Phase | UI capability | Notes |
+|-------|---------------|-------|
+| rc1 (now) | **none needed** | already covered by the CLI — see below |
+| rc2 | edit the **reference string** + Test | never the value |
+| v0.3 | credentials dashboard | per-source status metadata only |
+
+**rc1 — already met, no build.** `doctor`'s Secrets check resolves the configured
+`INVOKER_TOKEN_REF` and reports `token ref resolves (keychain:…)` — only the scheme
+prefix, never the value (inline secret → fail; unresolvable → warn + suggestion).
+The support bundle's `doctor.json` carries it. A status *card* in the dashboard is
+deferred not just by the freeze but because its `Last Resolve` / per-source status
+is durable instrumentation invoker doesn't have (doctor resolves on-demand and
+persists nothing) — so the card is new backend state + UI, i.e. rc2, not "purely
+observational."
+
+**rc2 — edit references, never secrets.** Settings page accepts a reference string
+for each source and validates it server-side, reusing what already exists:
+`resolveSecret`'s `RAW_SECRET` reject (`sk_`/`pk_`/`ghp_`/`xox…` → refused) +
+scheme check + a `testFetch`. Accept `env:`/`file:`/`keychain:`/`exec:`; reject any
+literal token or `Bearer …`. The POST body carries the reference, never a value.
+
+**v0.3 — credentials dashboard.** Per source (DOEH / BusinessAI / Notifications):
+reference, resolver, last_success, last_failure, error. `credential_status`
+metadata only — same invariant: no reveal, no copy, no plaintext, no persistence
+of the value.
+
 ## Gating principle
 
 `table.format@v1` is the **first unfreeze item after the pilot** — but only if the
