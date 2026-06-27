@@ -1,8 +1,10 @@
 import { Database } from "bun:sqlite";
-import { join, dirname } from "node:path";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+// Imported as text so the bundler embeds it — a runtime readFileSync(schema.sql) is invisible to
+// `bun build --compile` and the standalone binary crashes opening its workspace DB (ENOENT $bunfs).
+import schemaSql from "./schema.sql" with { type: "text" };
 import { sha256Hex } from "../core/hash.ts";
 import type { Artifact } from "../abi/index.ts";
 import type { SchedulePolicy, ScheduledJob, SchedulerState } from "../core/scheduler.ts";
@@ -75,8 +77,6 @@ export interface NotificationRecord {
   readAt?: number;
 }
 
-const SCHEMA_PATH = join(dirname(fileURLToPath(import.meta.url)), "schema.sql");
-
 /**
  * Local persistence. Holds jobs, runs, artifacts, cache lookups, plugins, templates,
  * and scheduler state. SQLite from day one: cheap, portable, and the natural home for
@@ -90,7 +90,7 @@ export class Store {
     mkdirSync(this.artifactsDir, { recursive: true });
     this.db = new Database(join(workspaceDir, "invoker.sqlite"));
     this.db.exec("PRAGMA journal_mode = WAL;");
-    this.db.exec(readFileSync(SCHEMA_PATH, "utf8"));
+    this.db.exec(schemaSql);
     this.migrate();
   }
 
