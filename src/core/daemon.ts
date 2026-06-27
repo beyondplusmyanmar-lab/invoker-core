@@ -151,18 +151,22 @@ export async function runDaemonLoop(store: Store, opts: DaemonLoopOptions = {}):
   const pid = opts.pid ?? process.pid;
   const startedAt = now();
   let ticks = 0;
+  let lastTickAt: number | undefined;
 
   store.setDaemonHeartbeat({ pid, startedAt, ticks, status: "running" });
 
   while (!signal?.aborted) {
     const r = await tickOnce(store, { fetcher: opts.fetcher, now: now() });
     ticks++;
-    store.setDaemonHeartbeat({ pid, startedAt, lastTickAt: r.at, ticks, status: "running" });
+    lastTickAt = r.at;
+    store.setDaemonHeartbeat({ pid, startedAt, lastTickAt, ticks, status: "running" });
     opts.onTick?.(r);
     if (signal?.aborted) break;
     await sleep(intervalMs, signal);
   }
 
-  store.setDaemonHeartbeat({ pid, startedAt, lastTickAt: now(), ticks, status: "stopped" });
+  // Mark stopped without disturbing `lastTickAt` — it must stay pinned to the
+  // last real tick, not the shutdown moment, or `status` over-reports activity.
+  store.setDaemonHeartbeat({ pid, startedAt, lastTickAt, ticks, status: "stopped" });
   return ticks;
 }

@@ -141,3 +141,29 @@ test("runDaemonLoop: ticks, writes heartbeat, stops on abort", async () => {
     expect(hb?.lastTickAt).toBeGreaterThan(0);
   });
 });
+
+test("runDaemonLoop: stopped heartbeat pins lastTickAt to the last real tick", async () => {
+  await withStore(async (store) => {
+    store.upsertJob(dueJob());
+    const controller = new AbortController();
+    const tickTimes: number[] = [];
+    let clock = 1000;
+    let sleeps = 0;
+    await runDaemonLoop(store, {
+      signal: controller.signal,
+      fetcher: fakeFetcher,
+      intervalMs: 1,
+      now: () => (clock += 1000), // monotonic & distinct, so a shutdown stamp would differ
+      pid: 4242,
+      onTick: (r) => tickTimes.push(r.at),
+      sleep: async () => {
+        if (++sleeps >= 2) controller.abort();
+      },
+    });
+
+    const hb = store.getDaemonHeartbeat();
+    expect(hb?.status).toBe("stopped");
+    // last tick must be the final real tick, not a later shutdown timestamp
+    expect(hb?.lastTickAt).toBe(tickTimes.at(-1));
+  });
+});
