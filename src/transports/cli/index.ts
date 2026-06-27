@@ -357,10 +357,10 @@ function daemonStatus(): number {
   const store = new Store(WORKSPACE);
   try {
     const hb = store.getDaemonHeartbeat();
+    const alive = held ? isAlive(held.pid) : false;
     if (!held) {
       console.log("daemon      not running (no lock)");
     } else {
-      const alive = isAlive(held.pid);
       console.log(`daemon      ${alive ? "running" : "stale lock (process gone)"}`);
       console.log(`pid         ${held.pid}`);
       console.log(`started     ${new Date(held.startedAt).toISOString()}`);
@@ -368,7 +368,10 @@ function daemonStatus(): number {
     if (hb) {
       console.log(`ticks       ${hb.ticks}`);
       console.log(`last tick   ${hb.lastTickAt ? new Date(hb.lastTickAt).toISOString() : "—"}`);
-      console.log(`heartbeat   ${hb.status}`);
+      // `hb.status` is the last value persisted to disk. When the lock is held
+      // but the process is gone, that value is stale — reconcile against the
+      // live probe so a dead daemon never reports a live heartbeat.
+      console.log(`heartbeat   ${held && !alive ? "stale (process gone)" : hb.status}`);
     }
     return 0;
   } finally {
