@@ -19,6 +19,7 @@ const baseInputs = (over: Partial<HealthInputs> = {}): HealthInputs => ({
   stalenessMs: 600_000,
   coordinator: { pending: 0, queueLimit: 10, timeoutMs: 300_000, maxRows: 50_000, maxBytes: 1e8, collapses24h: 0 },
   artifacts: { count: 0, diskBytes: 0 },
+  retention: { maxArtifacts: 5000, maxDiskBytes: 2 ** 34, notifications: 0, maxNotifications: 10000 },
   cacheHitRatio: 0,
   dbOk: true,
   ...over,
@@ -106,6 +107,8 @@ test("gatherHealth reports artifacts, last report, cache ratio, and a healthy DB
     expect(r.lastReport!.renderer).toBe("xlsx");
     expect(r.cacheHitRatio).toBeCloseTo(0.5); // one miss, one hit
     expect(r.diskFreeBytes).toBeGreaterThan(0);
+    expect(r.retention.maxArtifacts).toBe(5000); // budgets surfaced for the pilot to watch
+    expect(r.retention.maxNotifications).toBe(10000);
   });
 });
 

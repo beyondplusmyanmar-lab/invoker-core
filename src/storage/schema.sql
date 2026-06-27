@@ -94,6 +94,12 @@ CREATE TABLE IF NOT EXISTS scheduler_state (
   last_status TEXT
 );
 
+-- Small key/value store for runtime bookkeeping (e.g. last_cleanup_at, last_vacuum_at).
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 -- Liveness of long-running connectors (the notification listener; later the UI's BusinessAI link)
 -- so a one-shot `invoker health` can report "connected / stale / absent" without sharing a process.
 CREATE TABLE IF NOT EXISTS service_heartbeat (

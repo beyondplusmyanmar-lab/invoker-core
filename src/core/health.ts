@@ -13,6 +13,7 @@ const statfsSync = (nodeFs as unknown as {
 }).statfsSync;
 import type { DaemonHeartbeat } from "../storage/db.ts";
 import type { Limits } from "./limits.ts";
+import { DEFAULT_RETENTION, type RetentionPolicy } from "./retention.ts";
 
 export type ConnStatus = "connected" | "stale" | "disconnected" | "absent";
 export type SchedulerStatus = "running" | "stopped" | "absent";
@@ -32,6 +33,14 @@ export interface HealthReport {
     collapses24h: number;
   };
   artifacts: { count: number; diskBytes: number };
+  retention: {
+    maxArtifacts: number;
+    maxDiskBytes: number;
+    notifications: number;
+    maxNotifications: number;
+    lastCleanupAt?: number;
+    lastVacuumAt?: number;
+  };
   lastReport?: { job: string; at: number; renderer?: string; sha?: string };
   cacheHitRatio: number;
   db: "ok" | "error";
@@ -50,6 +59,7 @@ export interface HealthInputs {
   businessai?: { status: string; lastSeen: number };
   coordinator: HealthReport["coordinator"];
   artifacts: HealthReport["artifacts"];
+  retention: HealthReport["retention"];
   lastReport?: HealthReport["lastReport"];
   cacheHitRatio: number;
   dbOk: boolean;
@@ -91,6 +101,7 @@ export function buildHealthReport(i: HealthInputs): HealthReport {
     },
     coordinator: i.coordinator,
     artifacts: i.artifacts,
+    retention: i.retention,
     lastReport: i.lastReport,
     cacheHitRatio: i.cacheHitRatio,
     db: i.dbOk ? "ok" : "error",
@@ -104,6 +115,7 @@ export interface GatherHealthOptions {
   queueLimit: number;
   /** Live coordinator pending count when a long-running process owns one; 0 for the one-shot CLI. */
   pending?: number;
+  retention?: RetentionPolicy;
   workspaceDir: string;
   daemonAlive?: boolean;
   now?: number;
@@ -112,6 +124,8 @@ export interface GatherHealthOptions {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_STALENESS_MS = 10 * 60 * 1000; // a connected heartbeat older than 10m reads "stale"
+
+const numOrUndef = (v: string | undefined): number | undefined => (v == null ? undefined : Number(v));
 
 /** Gather durable facts from the store + filesystem and build the report. */
 export function gatherHealth(store: Store, opts: GatherHealthOptions): HealthReport {
@@ -142,6 +156,14 @@ export function gatherHealth(store: Store, opts: GatherHealthOptions): HealthRep
       collapses24h: store.collapsedCount(now - DAY_MS),
     },
     artifacts: { count: store.countArtifacts(), diskBytes: store.artifactsDiskBytes() },
+    retention: ((policy) => ({
+      maxArtifacts: policy.maxArtifacts,
+      maxDiskBytes: policy.maxDiskBytes,
+      notifications: store.countNotifications(),
+      maxNotifications: policy.maxNotifications,
+      lastCleanupAt: numOrUndef(store.getMeta("last_cleanup_at")),
+      lastVacuumAt: numOrUndef(store.getMeta("last_vacuum_at")),
+    }))(opts.retention ?? DEFAULT_RETENTION),
     lastReport: last
       ? { job: last.jobName ?? last.capability, at: last.startedAt, renderer: last.type, sha: last.sha }
       : undefined,

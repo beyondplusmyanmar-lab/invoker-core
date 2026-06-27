@@ -16,6 +16,7 @@ import { HttpFetchProvider, RoutingFetchProvider } from "../../core/fetch.ts";
 import { runJob, dueJobs, nextTick } from "../../core/runner.ts";
 import { ExecutionCoordinator, DEFAULT_MAX_PENDING } from "../../core/execution.ts";
 import { DEFAULT_LIMITS, type Limits } from "../../core/limits.ts";
+import { runCleanup, DEFAULT_RETENTION, type RetentionPolicy } from "../../core/retention.ts";
 import { SchedulePolicy, type ScheduledJob } from "../../core/scheduler.ts";
 import { importJobSpec } from "../../core/jobspec.ts";
 import { runListener } from "../../core/notification-listener.ts";
@@ -81,6 +82,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdDaemon(rest);
     case "health":
       return cmdHealth(rest);
+    case "cleanup":
+      return cmdCleanup(rest);
     case "doctor":
       return cmdDoctor(rest);
     case undefined:
@@ -717,6 +720,7 @@ async function daemonRun(): Promise<number> {
       fetcher: makeFetcher(),
       coordinator: makeCoordinator(limits),
       limits,
+      retention: makeRetention(),
       onTick: (r) => {
         if (r.ran || r.failed) {
           console.log(`[${new Date(r.at).toISOString()}] tick: ran ${r.ran}, failed ${r.failed}`);
@@ -817,6 +821,7 @@ function cmdHealth(args: string[]): number {
       version: VERSION,
       limits: makeLimits(),
       queueLimit: Number(process.env.INVOKER_MAX_PENDING ?? DEFAULT_MAX_PENDING),
+      retention: makeRetention(),
       workspaceDir: WORKSPACE,
       daemonAlive: held ? isAlive(held.pid) : undefined,
     });
@@ -861,12 +866,37 @@ function printHealth(r: HealthReport): void {
       `ceiling ${c.maxRows.toLocaleString()} rows / ${gb(c.maxBytes)} · ${c.collapses24h} collapses/24h`,
   );
   console.log(`  Artifacts      ${r.artifacts.count} (${gb(r.artifacts.diskBytes)})`);
+  const rt = r.retention;
+  const ago = (t?: number) => (t == null ? "never" : `${Math.round((Date.now() - t) / 86_400_000)}d ago`);
+  console.log(
+    `  Cleanup        ${gb(r.artifacts.diskBytes)} / ${gb(rt.maxDiskBytes)} · ${r.artifacts.count}/${rt.maxArtifacts} artifacts · ` +
+      `${rt.notifications}/${rt.maxNotifications} notif · vacuum ${ago(rt.lastVacuumAt)}`,
+  );
   console.log(
     `  Last report    ${r.lastReport ? `${r.lastReport.job} · ${at(r.lastReport.at)} · ${r.lastReport.renderer ?? "—"} · ${r.lastReport.sha?.slice(0, 12) ?? "—"}…` : "none yet"}`,
   );
   console.log(`  Cache hit      ${Math.round(r.cacheHitRatio * 100)}%`);
   console.log(`${glyph(r.db)} DB             ${r.db}`);
   console.log(`  Disk free      ${gb(r.diskFreeBytes)}`);
+}
+
+/** invoker cleanup [--dry-run] [--json] — enforce retention budgets now (oldest artifacts first). */
+function cmdCleanup(args: string[]): number {
+  const store = new Store(WORKSPACE);
+  try {
+    const report = runCleanup(store, makeRetention(), { dryRun: args.includes("--dry-run") });
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(report, null, 2));
+      return 0;
+    }
+    const verb = report.dryRun ? "would remove" : "removed";
+    const b = report.bytesFreed;
+    const freed = b >= 1 << 20 ? `${(b / (1 << 20)).toFixed(1)} MB` : `${(b / (1 << 10)).toFixed(1)} KB`;
+    console.log(`${verb} ${report.artifactsDeleted} artifacts (${freed}), ${report.notificationsDeleted} notifications`);
+    return 0;
+  } finally {
+    store.close();
+  }
 }
 
 /** invoker doctor [--strict] — read-only health sweep (P4). Exit 1 on FAIL; --strict also fails warnings. */
@@ -904,6 +934,15 @@ function makeLimits(): Limits {
     maxRows: Number(process.env.INVOKER_MAX_ROWS ?? DEFAULT_LIMITS.maxRows),
     maxBytes: Number(process.env.INVOKER_MAX_BYTES ?? DEFAULT_LIMITS.maxBytes),
     maxDurationMs: Number(process.env.INVOKER_MAX_DURATION_MS ?? DEFAULT_LIMITS.maxDurationMs),
+  };
+}
+
+/** Retention budgets from env, falling back to defaults (5000 artifacts / 20GB / 10k notifications). */
+function makeRetention(): RetentionPolicy {
+  return {
+    maxArtifacts: Number(process.env.INVOKER_MAX_ARTIFACTS ?? DEFAULT_RETENTION.maxArtifacts),
+    maxDiskBytes: Number(process.env.INVOKER_MAX_DISK_BYTES ?? DEFAULT_RETENTION.maxDiskBytes),
+    maxNotifications: Number(process.env.INVOKER_MAX_NOTIFICATIONS ?? DEFAULT_RETENTION.maxNotifications),
   };
 }
 
@@ -988,6 +1027,7 @@ function usage(code = 0): number {
       "  invoker artifact verify <sha> [--json]        prove an artifact is intact (bytes↔db↔manifest)",
       "",
       "  invoker health [--json]                       operability snapshot (scheduler/coordinator/cache/disk)",
+      "  invoker cleanup [--dry-run] [--json]          enforce retention budgets (oldest artifacts first)",
       "  invoker doctor [--strict]                     read-only health sweep (--strict: warnings fail)",
       "",
       "  (mcp, ws, tauri transports: see ARCHITECTURE.md roadmap)",

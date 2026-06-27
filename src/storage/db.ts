@@ -437,6 +437,58 @@ export class Store {
     return Number(row.n);
   }
 
+  // --- retention / maintenance (v0.2) --------------------------------------
+
+  /** Minimal artifact facts for eviction planning. */
+  listArtifactBriefs(): { id: string; path: string; size: number; createdAt: number }[] {
+    const rows = this.db
+      .query("SELECT id, path, size, created_at FROM artifacts")
+      .all() as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: String(r.id),
+      path: String(r.path),
+      size: Number(r.size),
+      createdAt: Number(r.created_at),
+    }));
+  }
+
+  /** Remove an artifact's index row (the file is removed by the caller). */
+  deleteArtifact(id: string): void {
+    this.db.query("DELETE FROM artifacts WHERE id = ?").run(id);
+  }
+
+  countNotifications(): number {
+    const row = this.db.query("SELECT COUNT(*) AS n FROM notifications").get() as { n: number };
+    return Number(row.n);
+  }
+
+  /** Keep the newest `max` notifications; delete the rest. Returns how many were deleted. */
+  trimNotifications(max: number): number {
+    const r = this.db
+      .query(
+        `DELETE FROM notifications WHERE id NOT IN (
+           SELECT id FROM notifications ORDER BY received_at DESC, id LIMIT ?
+         )`,
+      )
+      .run(max);
+    return r.changes;
+  }
+
+  vacuum(): void {
+    this.db.exec("VACUUM");
+  }
+
+  getMeta(key: string): string | undefined {
+    const row = this.db.query("SELECT value FROM meta WHERE key = ?").get(key) as
+      | { value: string }
+      | null;
+    return row ? row.value : undefined;
+  }
+
+  setMeta(key: string, value: string): void {
+    this.db.query("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(key, value);
+  }
+
   // --- health / observability (v0.2) ---------------------------------------
 
   /** Upsert a connector's liveness so a one-shot `invoker health` can report it. */

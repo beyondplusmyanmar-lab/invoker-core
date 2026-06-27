@@ -16,6 +16,7 @@ import type { Store } from "../storage/db.ts";
 import { runJob, dueJobs } from "./runner.ts";
 import type { ExecutionCoordinator } from "./execution.ts";
 import type { Limits } from "./limits.ts";
+import { maybeMaintain, type RetentionPolicy } from "./retention.ts";
 
 export const DEFAULT_INTERVAL_MS = 60_000;
 
@@ -140,6 +141,8 @@ export interface DaemonLoopOptions {
   /** Shared across ticks so concurrent same-report triggers collapse onto one render (E1). */
   coordinator?: ExecutionCoordinator;
   limits?: Limits;
+  /** When set, the loop enforces disk/notification budgets hourly + VACUUMs weekly. */
+  retention?: RetentionPolicy;
   pid?: number;
 }
 
@@ -171,6 +174,8 @@ export async function runDaemonLoop(store: Store, opts: DaemonLoopOptions = {}):
     lastTickAt = r.at;
     store.setDaemonHeartbeat({ pid, startedAt, lastTickAt, ticks, status: "running" });
     opts.onTick?.(r);
+    // Cheap, self-gated: enforces budgets at most hourly + VACUUMs weekly (no-op otherwise).
+    if (opts.retention) maybeMaintain(store, opts.retention, now());
     if (signal?.aborted) break;
     await sleep(intervalMs, signal);
   }
