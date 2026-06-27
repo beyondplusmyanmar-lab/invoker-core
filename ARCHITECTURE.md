@@ -82,6 +82,55 @@ The runtime contains **no embedded planner and no LLM**, now or later. If someon
 "let's put a small model inside invoker," that is a violation of this ADR — the runtime would
 start becoming a second orchestrator. Intelligence stays centralized in Business AI.
 
+### ADR-010 — The Brain↔Hands wire ABI is the artifact request *(Proposed, post-v0.1.0-alpha — implements ADR-009)*
+The concrete contract operationalizing ADR-009. Business AI may speak any transport (CLI, HTTP,
+SSE, WebSocket, NATS JetStream, MCP, cron, future). **All of them normalize to one message —
+the runtime never observes transport semantics, and never observes tokens, chat, conversations,
+deltas, or reasoning traces.** *Business AI streams thoughts; invoker executes intents.*
+
+```ts
+interface ArtifactRequest {                 // Brain → Hands. No data, no secrets.
+  correlationId: string;                    // transport metadata; NOT cache identity
+  capability: CapabilityId;
+  contractVersion: number;
+  template?: string;
+  params: Record<string, unknown>;
+}
+type ArtifactResult =                        // Hands → Brain. Discriminated; no illegal states.
+  | { correlationId: string; status: "success"; cacheKey: string;
+      artifactSha256: string; artifactHandle: string; cacheHit: boolean }
+  | { correlationId: string; status: "failed"; error: TransportError };
+interface TransportError { code: string; retryable: boolean; message?: string }
+//  BAD_REQUEST / CAPABILITY_NOT_FOUND / TEMPLATE_NOT_FOUND → retryable:false
+//  UPSTREAM_FETCH_FAILED → retryable:true ;  RENDER_FAILED → retryable:false
+//  Consumers switch on `code`; they MUST NOT parse `message`.
+```
+
+**Data provenance (normative).** The Brain sends *intent*, never *facts*. `ArtifactRequest`
+deliberately omits the `data` field that `InvokeRequest` carries: the runtime resolves facts via
+the template's declared source —
+`ArtifactRequest → FetchProvider.resolve() → InvokeRequest (data filled) → invoke()`.
+This buys replayability, small requests, credential isolation, runtime-owned fetch policy, and
+prevents ad-hoc payload injection by the Brain.
+
+**Terminal-only (normative).** `invoke()` may yield a `DataOutput` (intermediate `tabular.map`,
+future `table.sort`). Those are pipeline-internal and **never cross to the Brain** — the boundary
+speaks only terminal artifacts. Leaking a `TableModel`/`CapabilityOutput` back to the Brain would
+make it re-orchestrate the runtime's working memory, violating ADR-009. ("Never in files"
+extended to "never in intermediate data.")
+
+**Identity & idempotency.** `correlationId` is transport metadata only; it does not participate
+in cache identity (this supersedes the legacy "idempotency/run id" comment on `InvokeRequest.id`).
+Content identity stays `cacheKey`; integrity identity stays `artifactSha256` (ADR-006). A resent
+identical request therefore dedupes for free — but **request idempotency holds iff the underlying
+collection is immutable** (a closed window). Same `{from,to}` over an *open* window re-fetches and
+may legitimately differ; this is the collection-stability precondition (ADR-007 / future ADR-011)
+resurfacing at the transport boundary.
+
+**Security boundary.** An `ArtifactRequest` carries references, never credentials (ADR-005 rejects
+inline `sk_`). It is therefore safe to log, persist, replay, schedule, and audit, and Business AI
+stays entirely outside the credential blast radius.
+
 ---
 
 ## Scheduler policies
