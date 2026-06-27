@@ -5,9 +5,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   name            TEXT NOT NULL,
   capability      TEXT NOT NULL,
   contract_version INTEGER NOT NULL DEFAULT 1,
-  source          TEXT,                            -- optional JSON fetch ref (domain-agnostic URL)
+  source          TEXT,                            -- optional JSON fetch ref (http(s):// or file:)
   template        TEXT,
-  cron            TEXT NOT NULL,
+  steps           TEXT,                            -- optional pipeline (JSON PipelineStep[])
+  cron            TEXT,                            -- NULL/'' = unscheduled (manual run only)
   policy          TEXT NOT NULL DEFAULT 'catchup',  -- catchup | skip | resume
   max_lag_ms      INTEGER NOT NULL DEFAULT 86400000,
   enabled         INTEGER NOT NULL DEFAULT 1

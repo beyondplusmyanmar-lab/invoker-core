@@ -10,9 +10,10 @@ import { invoke } from "../../core/invoke.ts";
 import { Store } from "../../storage/db.ts";
 import { excelRender } from "../../engines/excel/index.ts";
 import { tabularMap } from "../../engines/tabular/index.ts";
-import { HttpFetchProvider } from "../../core/fetch.ts";
+import { HttpFetchProvider, RoutingFetchProvider } from "../../core/fetch.ts";
 import { runJob, dueJobs } from "../../core/runner.ts";
 import { SchedulePolicy, type ScheduledJob } from "../../core/scheduler.ts";
+import { importJobSpec } from "../../core/jobspec.ts";
 import { assertDeterministic } from "../../engines/conformance.ts";
 
 const WORKSPACE = process.env.INVOKER_HOME ?? join(homedir(), ".invoker");
@@ -153,15 +154,22 @@ async function cmdCapability(args: string[]): Promise<number> {
   return ok ? 0 : 1;
 }
 
-/** invoker jobs add --id <id> --name <n> --cap <c> --cron "<expr>" [--source url] [--template t] [--policy catchup|skip|resume] [--max-lag ms] */
-function cmdJobs(args: string[]): number {
+/**
+ * invoker jobs <list | add ... | import <file.toml>>
+ *   add    --id <id> --cap <c> --cron "<expr>" [--source ref] [--template t] [--policy ...] [--max-lag ms]
+ *   import <file.toml>  — ingest a (possibly pipeline) job; relative file: paths resolve to absolute
+ */
+async function cmdJobs(args: string[]): Promise<number> {
   const sub = args[0];
   const store = new Store(WORKSPACE);
   try {
     if (sub === "list") {
       for (const j of store.listJobs()) {
+        const what = j.steps?.length
+          ? `pipeline[${j.steps.map((s) => s.capability).join("→")}]`
+          : `${j.capability}@v${j.contractVersion}`;
         console.log(
-          `${j.id}  ${j.name}  ${j.capability}@v${j.contractVersion}  cron="${j.cron}"  ` +
+          `${j.id}  ${j.name}  ${what}  cron="${j.cron}"  ` +
             `policy=${j.policy}  ${j.enabled ? "enabled" : "disabled"}`,
         );
       }
@@ -185,7 +193,24 @@ function cmdJobs(args: string[]): number {
       console.log(`job '${job.id}' saved (${job.capability}, cron="${job.cron}", policy=${job.policy})`);
       return 0;
     }
-    console.error("usage: invoker jobs <list|add ...>");
+    if (sub === "import") {
+      const file = args[1];
+      if (!file) {
+        console.error("usage: invoker jobs import <file.toml>");
+        return 1;
+      }
+      const job = await importJobSpec(file);
+      store.upsertJob(job);
+      const shape = job.steps?.length
+        ? `pipeline ${job.steps.map((s) => s.capability).join("→")}`
+        : job.capability;
+      console.log(
+        `imported job '${job.id}' (${shape}, source=${job.source ?? "none"}, ` +
+          `cron=${job.cron || "manual"})`,
+      );
+      return 0;
+    }
+    console.error("usage: invoker jobs <list|add ...|import <file.toml>>");
     return 1;
   } finally {
     store.close();
@@ -234,9 +259,10 @@ async function cmdTick(_args: string[]): Promise<number> {
   }
 }
 
-function makeFetcher(): HttpFetchProvider {
+function makeFetcher(): RoutingFetchProvider {
   // Token reference (env:/file:/keychain:/exec:) supplied out-of-band; never inline (ADR-005).
-  return new HttpFetchProvider({ tokenRef: process.env.INVOKER_TOKEN_REF });
+  // Routing handles file: sources locally (offline) and everything else over HTTP.
+  return new RoutingFetchProvider(new HttpFetchProvider({ tokenRef: process.env.INVOKER_TOKEN_REF }));
 }
 
 function reportResult(result: {
@@ -276,6 +302,7 @@ function usage(code = 0): number {
       "  invoker invoke <cap> --data f.json [--dry-run]  run one capability",
       "",
       "  invoker jobs add --id <id> --cap <c> --cron \"<expr>\" [--source url] [--template t] [--policy catchup|skip|resume]",
+      "  invoker jobs import <file.toml>               import a (pipeline) job; file: sources resolve to absolute",
       "  invoker jobs list                             list scheduled jobs",
       "  invoker run <jobId>                           force-run a job now",
       "  invoker tick                                  run every job due under its policy",
