@@ -69,10 +69,12 @@ function connectOnce(
           for (const channel of config.channels) {
             ws.send(JSON.stringify({ event: "pusher:subscribe", data: { channel } }));
           }
+          store.setServiceHeartbeat("notifications", "connected", `${config.channels.length} channels`);
           opts.onConnected?.(frame.socketId);
           break;
         case "ping":
           ws.send(JSON.stringify({ event: "pusher:pong" })); // transport keepalive, not liveness
+          store.setServiceHeartbeat("notifications", "connected"); // refresh so idle stays "fresh"
           break;
         case "error":
           opts.onError?.(frame.message);
@@ -90,6 +92,7 @@ function connectOnce(
 
     ws.addEventListener("close", (ev: CloseEvent) => {
       cleanup();
+      store.setServiceHeartbeat("notifications", "disconnected", `code ${ev.code}`);
       opts.onDisconnected?.(`closed (code ${ev.code})`);
       resolve();
     });

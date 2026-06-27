@@ -24,6 +24,8 @@ export interface RunRecord {
   artifactPath?: string;
   artifactType?: string;
   artifactSize?: number;
+  /** True when this producer attached to an in-flight render instead of rendering (collapse). */
+  collapsed?: boolean;
 }
 
 /** A run joined with its job's name + artifact, newest-first — what the History panel binds to. */
@@ -105,6 +107,7 @@ export class Store {
       "ALTER TABLE runs ADD COLUMN artifact_type TEXT",
       "ALTER TABLE runs ADD COLUMN artifact_size INTEGER",
       "ALTER TABLE runs ADD COLUMN manifest_sha256 TEXT",
+      "ALTER TABLE runs ADD COLUMN collapsed INTEGER NOT NULL DEFAULT 0",
     ];
     for (const sql of additions) {
       try {
@@ -232,9 +235,9 @@ export class Store {
       .query(
         `INSERT OR REPLACE INTO runs
          (id, job_id, capability, status, cache_hit, duration_ms, started_at, finished_at, error,
-          artifact_sha256, artifact_path, artifact_type, artifact_size)
+          artifact_sha256, artifact_path, artifact_type, artifact_size, collapsed)
          VALUES ($id, $jobId, $cap, $status, $cacheHit, $dur, $startedAt, $finishedAt, $error,
-          $aSha, $aPath, $aType, $aSize)`,
+          $aSha, $aPath, $aType, $aSize, $collapsed)`,
       )
       .run({
         $id: r.id,
@@ -250,6 +253,7 @@ export class Store {
         $aPath: r.artifactPath ?? null,
         $aType: r.artifactType ?? null,
         $aSize: r.artifactSize ?? null,
+        $collapsed: r.collapsed ? 1 : 0,
       });
   }
 
@@ -431,6 +435,86 @@ export class Store {
   countArtifacts(): number {
     const row = this.db.query("SELECT COUNT(*) AS n FROM artifacts").get() as { n: number };
     return Number(row.n);
+  }
+
+  // --- health / observability (v0.2) ---------------------------------------
+
+  /** Upsert a connector's liveness so a one-shot `invoker health` can report it. */
+  setServiceHeartbeat(service: string, status: "connected" | "disconnected", detail?: string): void {
+    this.db
+      .query(
+        `INSERT OR REPLACE INTO service_heartbeat (service, status, last_seen, detail)
+         VALUES ($s, $status, $now, $detail)`,
+      )
+      .run({ $s: service, $status: status, $now: Date.now(), $detail: detail ?? null });
+  }
+
+  getServiceHeartbeat(service: string): { status: string; lastSeen: number; detail?: string } | undefined {
+    const row = this.db.query("SELECT * FROM service_heartbeat WHERE service = ?").get(service) as
+      | Record<string, unknown>
+      | null;
+    if (!row) return undefined;
+    return {
+      status: String(row.status),
+      lastSeen: Number(row.last_seen),
+      detail: row.detail == null ? undefined : String(row.detail),
+    };
+  }
+
+  /** Cache-hit ratio (0..1) over completed runs, optionally only those since `sinceMs`. */
+  cacheHitRatio(sinceMs?: number): number {
+    const where = sinceMs == null ? "" : "AND started_at >= ?";
+    const row = this.db
+      .query(
+        `SELECT COUNT(*) AS total, COALESCE(SUM(cache_hit), 0) AS hits
+         FROM runs WHERE status = 'completed' ${where}`,
+      )
+      .get(...(sinceMs == null ? [] : [sinceMs])) as { total: number; hits: number };
+    return row.total === 0 ? 0 : Number(row.hits) / Number(row.total);
+  }
+
+  /** Count of runs that collapsed onto an in-flight render (duplicate renders prevented) since `sinceMs`. */
+  collapsedCount(sinceMs: number): number {
+    const row = this.db
+      .query("SELECT COUNT(*) AS n FROM runs WHERE collapsed = 1 AND started_at >= ?")
+      .get(sinceMs) as { n: number };
+    return Number(row.n);
+  }
+
+  /** The most recent completed run that produced an artifact — "last report" on the health page. */
+  lastReport(): { jobName?: string; capability: string; startedAt: number; type?: string; sha?: string } | undefined {
+    const row = this.db
+      .query(
+        `SELECT r.capability, r.started_at, r.artifact_type, r.artifact_sha256, j.name AS job_name
+         FROM runs r LEFT JOIN jobs j ON j.id = r.job_id
+         WHERE r.status = 'completed' AND r.artifact_sha256 IS NOT NULL
+         ORDER BY r.started_at DESC, r.id LIMIT 1`,
+      )
+      .get() as Record<string, unknown> | null;
+    if (!row) return undefined;
+    return {
+      jobName: row.job_name == null ? undefined : String(row.job_name),
+      capability: String(row.capability),
+      startedAt: Number(row.started_at),
+      type: row.artifact_type == null ? undefined : String(row.artifact_type),
+      sha: row.artifact_sha256 == null ? undefined : String(row.artifact_sha256),
+    };
+  }
+
+  /** Total bytes of all recorded artifacts (summed from the index, no filesystem walk). */
+  artifactsDiskBytes(): number {
+    const row = this.db.query("SELECT COALESCE(SUM(size), 0) AS n FROM artifacts").get() as { n: number };
+    return Number(row.n);
+  }
+
+  /** SQLite self-check — surfaced as DB ok/error on the health page. */
+  dbIntegrityOk(): boolean {
+    try {
+      const row = this.db.query("PRAGMA quick_check").get() as Record<string, unknown> | null;
+      return !!row && String(Object.values(row)[0]) === "ok";
+    } catch {
+      return false;
+    }
   }
 
   close(): void {

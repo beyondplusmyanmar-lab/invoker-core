@@ -1,6 +1,6 @@
 {
   "name": "@beyondplusmm/invoker-core",
-  "version": "0.0.0",
+  "version": "0.2.0-beta",
   "description": "A deterministic capability runtime for artifact-producing workloads.",
   "type": "module",
   "license": "MIT",

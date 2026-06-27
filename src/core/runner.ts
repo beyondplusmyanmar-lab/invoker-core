@@ -111,6 +111,7 @@ export async function runJob(
       artifactPath: art?.path,
       artifactType: art?.type,
       artifactSize: art?.size,
+      collapsed: !leader, // attached to an in-flight render rather than rendering itself
     });
     // Only the leader actually rendered, so only it writes the artifact's manifest sidecar; the
     // attached waiters share that same artifact (and its existing manifest).

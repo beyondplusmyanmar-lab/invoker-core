@@ -36,6 +36,9 @@ export { toChatEvent, BusinessAIClient, FetchChatTransport } from "./core/busine
 export type { ChatEvent, ChatHandlers, ChatTransport, BusinessAIConfig } from "./core/businessai.ts";
 export { verifyArtifact, buildVerifyReport, checkOoxml } from "./core/verify.ts";
 export type { VerifyReport, VerifyCheck, ManifestSidecar } from "./core/verify.ts";
+export { gatherHealth, buildHealthReport } from "./core/health.ts";
+export type { HealthReport, HealthInputs, ConnStatus, SchedulerStatus, GatherHealthOptions } from "./core/health.ts";
+export { VERSION } from "./version.ts";
 export { SchedulePolicy, decideRun } from "./core/scheduler.ts";
 export type { ScheduledJob, SchedulerState } from "./core/scheduler.ts";
 export {

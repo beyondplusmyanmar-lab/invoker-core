@@ -32,7 +32,10 @@ CREATE TABLE IF NOT EXISTS runs (
   artifact_type   TEXT,
   artifact_size   INTEGER,
   -- sha256 of the manifest sidecar's own bytes, so `artifact verify` can detect sidecar tampering.
-  manifest_sha256 TEXT
+  manifest_sha256 TEXT,
+  -- 1 when this producer attached to an in-flight render instead of rendering (coordinator collapse).
+  -- Surfaces "duplicate renders prevented" on the health page — a direct pilot-gate signal.
+  collapsed       INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs (started_at DESC);
 
@@ -89,6 +92,15 @@ CREATE TABLE IF NOT EXISTS scheduler_state (
   job_id      TEXT PRIMARY KEY,
   last_run_at INTEGER,
   last_status TEXT
+);
+
+-- Liveness of long-running connectors (the notification listener; later the UI's BusinessAI link)
+-- so a one-shot `invoker health` can report "connected / stale / absent" without sharing a process.
+CREATE TABLE IF NOT EXISTS service_heartbeat (
+  service   TEXT PRIMARY KEY,           -- e.g. 'notifications'
+  status    TEXT NOT NULL,              -- connected | disconnected
+  last_seen INTEGER NOT NULL,
+  detail    TEXT
 );
 
 -- P2 daemon: single-row heartbeat so `daemon status` and `doctor` can read liveness

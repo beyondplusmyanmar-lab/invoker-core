@@ -22,6 +22,8 @@ import { runListener } from "../../core/notification-listener.ts";
 import type { ListenerConfig } from "../../core/notifications.ts";
 import { BusinessAIClient, FetchChatTransport } from "../../core/businessai.ts";
 import { verifyArtifact } from "../../core/verify.ts";
+import { gatherHealth, type HealthReport } from "../../core/health.ts";
+import { VERSION } from "../../version.ts";
 import { resolveSecret } from "../../core/secrets.ts";
 import { assertDeterministic } from "../../engines/conformance.ts";
 import {
@@ -77,6 +79,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdTick(rest);
     case "daemon":
       return cmdDaemon(rest);
+    case "health":
+      return cmdHealth(rest);
     case "doctor":
       return cmdDoctor(rest);
     case undefined:
@@ -804,6 +808,67 @@ function daemonStatus(): number {
   }
 }
 
+/** invoker health [--json] — one read-only operability snapshot from durable state. Exit 1 if DB unhealthy. */
+function cmdHealth(args: string[]): number {
+  const store = new Store(WORKSPACE);
+  try {
+    const held = readLock(WORKSPACE);
+    const report = gatherHealth(store, {
+      version: VERSION,
+      limits: makeLimits(),
+      queueLimit: Number(process.env.INVOKER_MAX_PENDING ?? DEFAULT_MAX_PENDING),
+      workspaceDir: WORKSPACE,
+      daemonAlive: held ? isAlive(held.pid) : undefined,
+    });
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(report, null, 2));
+      return report.ok ? 0 : 1;
+    }
+    printHealth(report);
+    return report.ok ? 0 : 1;
+  } finally {
+    store.close();
+  }
+}
+
+function printHealth(r: HealthReport): void {
+  const at = (t?: number) => (t == null ? "—" : new Date(t).toISOString().replace("T", " ").slice(0, 16));
+  const gb = (b?: number) =>
+    b == null
+      ? "—"
+      : b >= 1 << 30
+        ? `${(b / (1 << 30)).toFixed(1)} GB`
+        : b >= 1 << 20
+          ? `${(b / (1 << 20)).toFixed(1)} MB`
+          : `${(b / (1 << 10)).toFixed(1)} KB`;
+  const mins = (ms: number) => (ms % 60000 === 0 ? `${ms / 60000}m` : `${Math.round(ms / 1000)}s`);
+  const glyph = (s: string) => (s === "connected" || s === "running" || s === "ok" ? "✓" : s === "absent" ? "·" : "⚠");
+
+  console.log(`invoker ${r.version}\n`);
+  const sched =
+    r.scheduler.status === "absent"
+      ? "absent (no daemon)"
+      : `${r.scheduler.status} (last tick ${at(r.scheduler.lastTickAt)}, ${r.scheduler.ticks ?? 0} ticks)`;
+  console.log(`${glyph(r.scheduler.status)} Scheduler      ${sched}`);
+  console.log(
+    `${glyph(r.notifications.status)} Notifications  ${r.notifications.status}` +
+      (r.notifications.detail ? ` (${r.notifications.detail})` : ""),
+  );
+  console.log(`${glyph(r.businessai.status)} BusinessAI     ${r.businessai.status}`);
+  const c = r.coordinator;
+  console.log(
+    `  Coordinator    ${c.pending}/${c.queueLimit} pending · timeout ${mins(c.timeoutMs)} · ` +
+      `ceiling ${c.maxRows.toLocaleString()} rows / ${gb(c.maxBytes)} · ${c.collapses24h} collapses/24h`,
+  );
+  console.log(`  Artifacts      ${r.artifacts.count} (${gb(r.artifacts.diskBytes)})`);
+  console.log(
+    `  Last report    ${r.lastReport ? `${r.lastReport.job} · ${at(r.lastReport.at)} · ${r.lastReport.renderer ?? "—"} · ${r.lastReport.sha?.slice(0, 12) ?? "—"}…` : "none yet"}`,
+  );
+  console.log(`  Cache hit      ${Math.round(r.cacheHitRatio * 100)}%`);
+  console.log(`${glyph(r.db)} DB             ${r.db}`);
+  console.log(`  Disk free      ${gb(r.diskFreeBytes)}`);
+}
+
 /** invoker doctor [--strict] — read-only health sweep (P4). Exit 1 on FAIL; --strict also fails warnings. */
 async function cmdDoctor(args: string[]): Promise<number> {
   const strict = args.includes("--strict");
@@ -922,6 +987,7 @@ function usage(code = 0): number {
       "",
       "  invoker artifact verify <sha> [--json]        prove an artifact is intact (bytes↔db↔manifest)",
       "",
+      "  invoker health [--json]                       operability snapshot (scheduler/coordinator/cache/disk)",
       "  invoker doctor [--strict]                     read-only health sweep (--strict: warnings fail)",
       "",
       "  (mcp, ws, tauri transports: see ARCHITECTURE.md roadmap)",
