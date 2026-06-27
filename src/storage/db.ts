@@ -595,6 +595,15 @@ export class Store {
     }
   }
 
+  /**
+   * A consistent point-in-time snapshot of the entire database for the support bundle. Uses
+   * SQLite's own serializer, so it captures committed WAL pages too — copying the .sqlite file
+   * directly would miss anything still sitting in the -wal sidecar.
+   */
+  snapshotBytes(): Uint8Array {
+    return new Uint8Array(this.db.serialize());
+  }
+
   close(): void {
     this.db.close();
   }

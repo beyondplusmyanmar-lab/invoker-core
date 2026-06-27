@@ -38,6 +38,8 @@ import {
   DEFAULT_INTERVAL_MS,
 } from "../../core/daemon.ts";
 import { runDoctor, runPilotCheck, type DoctorReport, type PilotReport } from "../../core/doctor.ts";
+import { buildSupportBundle } from "../../core/support.ts";
+import { appendLog } from "../../core/log.ts";
 
 const SELF = fileURLToPath(import.meta.url);
 
@@ -89,6 +91,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdUi(rest);
     case "doctor":
       return cmdDoctor(rest);
+    case "support":
+      return cmdSupport(rest);
     case undefined:
     case "help":
     case "--help":
@@ -534,16 +538,26 @@ async function notifyListen(args: string[]): Promise<number> {
 
   const store = new Store(WORKSPACE);
   console.log(`listening on ${cfg.channels.join(", ")} — Ctrl-C to stop`);
+  appendLog(WORKSPACE, `listener start channels=${cfg.channels.join(",")}`);
   try {
     await runListener(cfg, store, {
       signal: controller.signal,
-      onConnected: (sid) => console.log(`[notify] connected${sid ? ` (${sid})` : ""}`),
-      onDisconnected: (why) => console.log(`[notify] disconnected: ${why}`),
-      onMessage: (e, stored) =>
-        console.log(`[notify] ${stored ? "•" : "dup"} ${e.type}: ${e.title}`),
+      onConnected: (sid) => {
+        console.log(`[notify] connected${sid ? ` (${sid})` : ""}`);
+        appendLog(WORKSPACE, `listener connected${sid ? ` sid=${sid}` : ""}`);
+      },
+      onDisconnected: (why) => {
+        console.log(`[notify] disconnected: ${why}`);
+        appendLog(WORKSPACE, `listener disconnected: ${why}`);
+      },
+      onMessage: (e, stored) => {
+        console.log(`[notify] ${stored ? "•" : "dup"} ${e.type}: ${e.title}`);
+        appendLog(WORKSPACE, `notify ${stored ? "stored" : "dup"} ${e.type}: ${e.title}`);
+      },
       onError: (msg) => console.error(`[notify] error: ${msg}`),
     });
     console.log("listener stopped");
+    appendLog(WORKSPACE, "listener stop");
     return 0;
   } finally {
     store.close();
@@ -717,8 +731,9 @@ async function daemonRun(): Promise<number> {
   console.log(
     `daemon running (pid ${process.pid}), interval ${DEFAULT_INTERVAL_MS}ms — Ctrl-C to stop`,
   );
+  appendLog(WORKSPACE, `daemon start pid=${process.pid} interval=${DEFAULT_INTERVAL_MS}ms`);
   try {
-    await runDaemonLoop(store, {
+    const ticks = await runDaemonLoop(store, {
       signal: controller.signal,
       fetcher: makeFetcher(),
       coordinator: makeCoordinator(limits),
@@ -727,10 +742,12 @@ async function daemonRun(): Promise<number> {
       onTick: (r) => {
         if (r.ran || r.failed) {
           console.log(`[${new Date(r.at).toISOString()}] tick: ran ${r.ran}, failed ${r.failed}`);
+          appendLog(WORKSPACE, `tick ran=${r.ran} failed=${r.failed} jobs=${r.jobIds.join(",")}`);
         }
       },
     });
     console.log("daemon stopped");
+    appendLog(WORKSPACE, `daemon stop ticks=${ticks}`);
     return 0;
   } finally {
     store.close();
@@ -1005,6 +1022,56 @@ function printPilot(report: PilotReport): void {
   console.log(`\n${report.passed ? "PILOT PASSED" : report.ok ? "PASS" : "FAIL"}`);
 }
 
+/**
+ * invoker support bundle [--out <dir>] — write support-YYYYMMDD.zip: durable state + a redacted
+ * config, safe to attach to a report. Reuses the exact `health`/`doctor` code paths so the bundle
+ * shows what those commands would. Default output dir is the current directory.
+ */
+async function cmdSupport(args: string[]): Promise<number> {
+  const sub = args[0];
+  if (sub !== undefined && sub !== "bundle") {
+    console.error("usage: invoker support bundle [--out <dir>]");
+    return 1;
+  }
+  const outDir = optValue(args, "--out") ?? ".";
+
+  const store = new Store(WORKSPACE);
+  try {
+    const limits = makeLimits();
+    const held = readLock(WORKSPACE);
+    const health = gatherHealth(store, {
+      version: VERSION,
+      limits,
+      queueLimit: Number(process.env.INVOKER_MAX_PENDING ?? DEFAULT_MAX_PENDING),
+      retention: makeRetention(),
+      workspaceDir: WORKSPACE,
+      daemonAlive: held ? isAlive(held.pid) : undefined,
+    });
+    const doctor = await runDoctor({
+      workspace: WORKSPACE,
+      store,
+      registry,
+      version: VERSION,
+      limits,
+      retention: makeRetention(),
+      queueLimit: Number(process.env.INVOKER_MAX_PENDING ?? DEFAULT_MAX_PENDING),
+      tokenRef: process.env.INVOKER_TOKEN_REF,
+      strict: false,
+    });
+
+    const bundle = buildSupportBundle({ workspace: WORKSPACE, store, health, doctor, env: process.env });
+    const path = join(outDir, bundle.filename);
+    await Bun.write(path, bundle.bytes);
+
+    const kb = (bundle.bytes.length / 1024).toFixed(0);
+    console.log(`wrote ${path} (${kb} KB)`);
+    for (const e of bundle.entries) console.log(`  ${e}`);
+    return 0;
+  } finally {
+    store.close();
+  }
+}
+
 /** Input ceilings from env, falling back to the v0.2 defaults (50k rows / 100MB / 5min). */
 function makeLimits(): Limits {
   return {
@@ -1107,6 +1174,7 @@ function usage(code = 0): number {
       "  invoker cleanup [--dry-run] [--json]          enforce retention budgets (oldest artifacts first)",
       "  invoker ui [--port N]                         local dashboard (default :3710; consume-only)",
       "  invoker doctor [--strict] [--pilot] [--json]  pilot-support sweep (PASS/FAIL; --pilot: 7-day gates)",
+      "  invoker support bundle [--out <dir>]          write support-YYYYMMDD.zip (durable state, redacted)",
       "",
       "  (mcp, ws, tauri transports: see ARCHITECTURE.md roadmap)",
     ].join("\n"),
