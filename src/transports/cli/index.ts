@@ -37,7 +37,7 @@ import {
   abortableSleep,
   DEFAULT_INTERVAL_MS,
 } from "../../core/daemon.ts";
-import { runDoctor } from "../../core/doctor.ts";
+import { runDoctor, runPilotCheck, type DoctorReport, type PilotReport } from "../../core/doctor.ts";
 
 const SELF = fileURLToPath(import.meta.url);
 
@@ -936,33 +936,73 @@ async function cmdUi(args: string[]): Promise<number> {
   return 0;
 }
 
-/** invoker doctor [--strict] — read-only health sweep (P4). Exit 1 on FAIL; --strict also fails warnings. */
+/**
+ * invoker doctor [--strict] [--pilot] [--json] — pilot-support sweep. Opinionated PASS/FAIL.
+ *   default: FAIL only on a hard fault · --strict: warnings fail too · --pilot: check the 7-day gates
+ */
 async function cmdDoctor(args: string[]): Promise<number> {
-  const strict = args.includes("--strict");
   const store = new Store(WORKSPACE);
   try {
-    const report = await runDoctor({
+    const limits = makeLimits();
+    const deps = {
       workspace: WORKSPACE,
       store,
       registry,
+      version: VERSION,
+      limits,
+      retention: makeRetention(),
+      queueLimit: Number(process.env.INVOKER_MAX_PENDING ?? DEFAULT_MAX_PENDING),
       tokenRef: process.env.INVOKER_TOKEN_REF,
-      bunVersion: typeof Bun !== "undefined" ? Bun.version : undefined,
-      strict,
-    });
-    const mark = (s: string) => (s === "ok" ? "✓" : s === "warn" ? "⚠" : "✗");
-    for (const c of report.checks) {
-      console.log(`${mark(c.status)} ${c.name.padEnd(13)} ${c.detail}`);
+      strict: args.includes("--strict"),
+    };
+    const asJson = args.includes("--json");
+
+    if (args.includes("--pilot")) {
+      const report = runPilotCheck(deps);
+      if (asJson) {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        printPilot(report);
+      }
+      return report.ok ? 0 : 1;
     }
-    if (!report.ok) {
-      const bad = report.checks.filter((c) =>
-        strict ? c.status !== "ok" : c.status === "fail",
-      );
-      console.log(`\n${strict ? "strict " : ""}check failed: ${bad.map((c) => c.name).join(", ")}`);
+
+    const report = await runDoctor(deps);
+    if (asJson) {
+      console.log(JSON.stringify(report, null, 2));
+      return report.ok ? 0 : 1;
     }
+    printDoctor(report);
     return report.ok ? 0 : 1;
   } finally {
     store.close();
   }
+}
+
+function printDoctor(report: DoctorReport): void {
+  const mark = (s: string) => (s === "ok" ? "✓" : s === "warn" ? "⚠" : "✗");
+  console.log(`INVOKER ${report.version}\n`);
+  for (const c of report.checks) {
+    console.log(`${mark(c.status)} ${c.name.padEnd(15)}${c.status === "ok" ? "" : c.detail}`);
+  }
+  console.log(`\n${report.ok ? "PASS" : "FAIL"}`);
+  if (!report.ok) {
+    const bad = report.checks.filter((c) => (report.strict ? c.status !== "ok" : c.status === "fail"));
+    const first = bad[0];
+    if (first) {
+      console.log(`\nReason:\n${first.name}: ${first.detail}`);
+      if (first.suggestion) console.log(`\nSuggestion:\n${first.suggestion}`);
+    }
+  }
+}
+
+function printPilot(report: PilotReport): void {
+  console.log("Pilot Status\n");
+  console.log(`Days Running          ${report.daysRunning}/${report.daysTarget}\n`);
+  for (const g of report.gates) {
+    console.log(`${g.ok ? " " : "✗"} ${g.name.padEnd(20)} ${g.value}`);
+  }
+  console.log(`\n${report.passed ? "PILOT PASSED" : report.ok ? "PASS" : "FAIL"}`);
 }
 
 /** Input ceilings from env, falling back to the v0.2 defaults (50k rows / 100MB / 5min). */
@@ -1066,7 +1106,7 @@ function usage(code = 0): number {
       "  invoker health [--json]                       operability snapshot (scheduler/coordinator/cache/disk)",
       "  invoker cleanup [--dry-run] [--json]          enforce retention budgets (oldest artifacts first)",
       "  invoker ui [--port N]                         local dashboard (default :3710; consume-only)",
-      "  invoker doctor [--strict]                     read-only health sweep (--strict: warnings fail)",
+      "  invoker doctor [--strict] [--pilot] [--json]  pilot-support sweep (PASS/FAIL; --pilot: 7-day gates)",
       "",
       "  (mcp, ws, tauri transports: see ARCHITECTURE.md roadmap)",
     ].join("\n"),

@@ -553,6 +553,32 @@ export class Store {
     };
   }
 
+  /** Recent artifact sha256s, newest-first — for doctor's sample verify and the pilot corruption sweep. */
+  recentArtifactShas(limit: number): string[] {
+    const rows = this.db
+      .query("SELECT artifact_sha256 FROM artifacts ORDER BY created_at DESC LIMIT ?")
+      .all(limit) as Record<string, unknown>[];
+    return rows.map((r) => String(r.artifact_sha256));
+  }
+
+  /**
+   * Count of duplicate fresh renders: completed runs that rendered (not cache-hit, not collapsed)
+   * an artifact sha that an earlier fresh render already produced. A direct "0 duplicate renders"
+   * pilot-gate signal — proves cache + coordinator + determinism are all doing their jobs.
+   */
+  duplicateRenderCount(): number {
+    const row = this.db
+      .query(
+        `SELECT COALESCE(SUM(c - 1), 0) AS dups FROM (
+           SELECT COUNT(*) AS c FROM runs
+           WHERE status = 'completed' AND cache_hit = 0 AND collapsed = 0 AND artifact_sha256 IS NOT NULL
+           GROUP BY artifact_sha256
+         )`,
+      )
+      .get() as { dups: number };
+    return Number(row.dups);
+  }
+
   /** Total bytes of all recorded artifacts (summed from the index, no filesystem walk). */
   artifactsDiskBytes(): number {
     const row = this.db.query("SELECT COALESCE(SUM(size), 0) AS n FROM artifacts").get() as { n: number };

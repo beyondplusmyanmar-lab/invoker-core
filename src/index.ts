@@ -57,8 +57,8 @@ export {
   DEFAULT_INTERVAL_MS,
 } from "./core/daemon.ts";
 export type { LockInfo, TickResult, DaemonLoopOptions } from "./core/daemon.ts";
-export { runDoctor, gteVersion } from "./core/doctor.ts";
-export type { DoctorCheck, DoctorReport, CheckStatus, DoctorDeps } from "./core/doctor.ts";
+export { runDoctor, runPilotCheck, gteVersion } from "./core/doctor.ts";
+export type { DoctorCheck, DoctorReport, CheckStatus, DoctorDeps, PilotGate, PilotReport } from "./core/doctor.ts";
 export { Store } from "./storage/db.ts";
 export type {
   RunRecord,

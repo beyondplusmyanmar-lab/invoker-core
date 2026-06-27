@@ -11,6 +11,16 @@ import type { Store } from "../storage/db.ts";
 const statfsSync = (nodeFs as unknown as {
   statfsSync?: (path: string) => { bavail: number | bigint; bsize: number | bigint };
 }).statfsSync;
+
+/** Free bytes on the filesystem holding `path`, or undefined if statfs is unavailable. */
+export function freeDiskBytes(path: string): number | undefined {
+  try {
+    const fs = statfsSync?.(path);
+    return fs ? Number(fs.bavail) * Number(fs.bsize) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 import type { DaemonHeartbeat } from "../storage/db.ts";
 import type { Limits } from "./limits.ts";
 import { DEFAULT_RETENTION, type RetentionPolicy } from "./retention.ts";
@@ -131,13 +141,7 @@ const numOrUndef = (v: string | undefined): number | undefined => (v == null ? u
 export function gatherHealth(store: Store, opts: GatherHealthOptions): HealthReport {
   const now = opts.now ?? Date.now();
   const last = store.lastReport();
-  let diskFreeBytes: number | undefined;
-  try {
-    const fs = statfsSync?.(opts.workspaceDir);
-    diskFreeBytes = fs ? Number(fs.bavail) * Number(fs.bsize) : undefined;
-  } catch {
-    diskFreeBytes = undefined;
-  }
+  const diskFreeBytes = freeDiskBytes(opts.workspaceDir);
 
   return buildHealthReport({
     version: opts.version,
