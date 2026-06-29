@@ -69,3 +69,21 @@ src/
   transports/  cli/ (and later: ws/, mcp/, tauri/)
 tests/         determinism gate, etc.
 ```
+
+## Operational documents
+
+Top-level docs, grouped by the phase they govern. This index is the map — a
+contributor should know which document is authoritative for which phase without
+hunting.
+
+| Phase | Document | Governs |
+|-------|----------|---------|
+| Always | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | The nine invariants + ADRs. |
+| Pilot A (current) | [`PILOT.md`](./PILOT.md) | Protocol: gates, freeze policy, ledger template, exit criteria. |
+| Pilot A (current) | [`PILOT-START.md`](./PILOT-START.md) | Day-1 ignition record (filled on the shop laptop). |
+| Pilot A (current) | [`pilot-ledger.md`](./pilot-ledger.md) | Running per-day evidence; what the Day-7 review reads. |
+| Post-pilot | [`POST-PILOT-PLAN.md`](./POST-PILOT-PLAN.md) | Freeze framework + post-pilot execution sequence. |
+| Post-pilot | [`BACKLOG.md`](./BACKLOG.md) | Evidence-gated capability queue (P0/P1/P2). |
+
+Per-run pilot snapshots live under the git-ignored `pilot/`; they are evidence,
+not tracked documents.

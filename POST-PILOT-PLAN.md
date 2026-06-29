@@ -65,6 +65,21 @@ queue is already fairly clear; the table below is the execution sequence.
 - **AUTH-4 / `orders:read` is the bridge:** it is the DOEH-side prerequisite that
   unblocks invoker-core's deferred live seam, and therefore Pilot B.
 
+## Governance — this is a living queue, not a design document
+
+Treat this plan as a queue under the same evidence-first discipline applied to
+the codebase. While Pilot A runs:
+
+- **Add** a new item only if it is backed by evidence from the pilot or an
+  explicit governance decision.
+- **Don't reorder** priorities unless the evidence changes.
+- **Keep each entry traceable** to a pilot observation or a recorded decision —
+  no speculative entries.
+
+The next meaningful engineering decision should come from one of three sources —
+a P0 gate failure, the Day-7 pilot review, or the DOEH integration phase — not
+from speculative feature work.
+
 ## Relationship to Pilot B
 
 Pilot B (live DOEH integration soak) cannot begin until both: (a) Pilot A passes,
