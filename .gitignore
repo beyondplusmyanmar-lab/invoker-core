@@ -9,6 +9,8 @@ bun.lockb
 
 # pilot snapshots from scripts/pilot-collect (per-run; contains a support bundle)
 pilot/
+# stray support bundles from `invoker support bundle` (per-run; redacted but local)
+support-*.zip
 
 # resolved secrets must never land in the tree
 *.key
