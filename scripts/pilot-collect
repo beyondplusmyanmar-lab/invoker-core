@@ -1,24 +1,38 @@
 #!/usr/bin/env bash
 # pilot-collect — one morning snapshot of the v0.2.0-rc1 pilot (see PILOT.md).
-# Intentionally dumb: it runs the three read-only commands, samples the daemon's
-# memory, and records build identity into a timestamped folder. It is operator
-# tooling, not runtime capability — safe to run during the freeze.
+# Runs the read-only commands, samples the daemon's memory, records build identity
+# into a timestamped folder, and AUTO-APPENDS the derived ledger row. It is operator
+# tooling, not runtime capability — safe to run during the freeze (it never touches
+# the daemon, scheduler, render, or persistence paths).
+#
+# Design: the RUNTIME owns the pilot clock. `doctor --pilot` writes pilot_started_at
+# into the workspace and reports daysRunning/daysTarget — so the day count is read
+# from doctor.json, never hand-counted and never duplicated in the repo. pilot-meta.json
+# carries only what the runtime cannot know (the start SHA, for the drift check, and a
+# redacted shop label). Real shop/laptop/operator identity lives ONLY in the git-ignored
+# pilot/identity.json and is never committed to this public repo.
 set -euo pipefail
 
-# Fail loud if the binary is missing (a real setup error), but NOT if a gate
-# trips below — that is exactly when we need a complete snapshot.
+# Run from the repo root regardless of how we were invoked, so every relative path
+# (pilot/, pilot-meta.json, pilot-ledger.md) resolves the same way.
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+# Fail loud if the binary is missing (a real setup error), but NOT if a gate trips
+# below — that is exactly when we need a complete snapshot.
 command -v invoker >/dev/null || { echo "invoker not on PATH" >&2; exit 1; }
 
 STAMP=$(date +"%Y%m%d-%H%M%S")
+TODAY=$(date +"%Y-%m-%d")
 OUT="pilot/${STAMP}"
 mkdir -p "$OUT/support"
 
 echo "Collecting pilot snapshot → $OUT"
 
-# Gates 1-6 come from these two read-only commands. `doctor --pilot` exits 1 when
-# a gate FAILS and `health` exits 1 on DB trouble — both still print their JSON, so
-# tolerate the non-zero exit and keep collecting (the failing morning is the one we
-# most need a full snapshot for).
+# Gates come from these two read-only commands. `doctor --pilot` exits 1 when a gate
+# FAILS and `health` exits 1 on DB trouble — both still print their JSON, so tolerate
+# the non-zero exit and keep collecting (the failing morning is the one we most need a
+# full snapshot for).
 invoker doctor --pilot --json > "$OUT/doctor.json" || true
 invoker health --json         > "$OUT/health.json" || true
 
@@ -32,31 +46,97 @@ WS="${INVOKER_HOME:-$HOME/.invoker}"
 PID=$(grep -o '"pid":[0-9]*' "$WS/daemon.lock" 2>/dev/null | grep -o '[0-9]*' || true)
 if [ -n "${PID:-}" ] && kill -0 "$PID" 2>/dev/null; then
   ps -o pid,rss,vsz,etime,command -p "$PID" > "$OUT/rss.txt"
+  RSS_KB=$(ps -o rss=    -p "$PID" 2>/dev/null | tr -dc '0-9' || true)
+  UPTIME_SEC=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -dc '0-9' || true)
 else
   echo "daemon not running (no live pid in $WS/daemon.lock)" > "$OUT/rss.txt"
+  RSS_KB=""; UPTIME_SEC=""
+fi
+RSS_MB=$([ -n "${RSS_KB:-}" ] && awk "BEGIN{printf \"%.1f MB\", ${RSS_KB}/1024}" || echo "—")
+UPTIME_H=$([ -n "${UPTIME_SEC:-}" ] && awk "BEGIN{printf \"%dh\", ${UPTIME_SEC}/3600}" || echo "—")
+
+# --- Derive the machine half of the ledger row from doctor.json --------------------
+dj="$OUT/doctor.json"
+DAYS_RUN=$(grep -m1 '"daysRunning"' "$dj" 2>/dev/null | sed -E 's/[^0-9]//g' || true)
+DAYS_TGT=$(grep -m1 '"daysTarget"'  "$dj" 2>/dev/null | sed -E 's/[^0-9]//g' || true)
+gate() { grep -A2 "\"name\": \"$1\"" "$dj" 2>/dev/null | grep -m1 '"value"' | sed -E 's/.*"value": *"([^"]*)".*/\1/' || true; }
+DUP=$(gate "Duplicate renders"); CORR=$(gate "Corrupt artifacts")
+MISS=$(gate "Missed schedules"); SQL=$(gate "SQLite recoveries")
+if grep '"ok"' "$dj" 2>/dev/null | tail -1 | grep -q true; then RESULT="PASS"; else RESULT="GATE FAIL"; fi
+
+# Disk headroom (disk-exhaustion gate): free GB on the workspace volume.
+DISK=$(df -BG "$WS" 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4); print $4" GB free"}' || echo "—")
+
+# --- Build identity + drift check (catches an accidental upgrade mid-pilot) --------
+VERSION=$(grep -m1 '"version"' "$OUT/health.json" 2>/dev/null | sed -E 's/.*"version": *"([^"]+)".*/\1/' || true)
+HEAD_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+HEAD=$(git rev-parse HEAD 2>/dev/null || echo "not a checkout")
+START_SHA=$(grep -m1 '"start_sha"' pilot-meta.json 2>/dev/null | sed -E 's/.*"start_sha": *"([^"]+)".*/\1/' || true)
+SHOP_LABEL=$(grep -m1 '"shop_label"' pilot-meta.json 2>/dev/null | sed -E 's/.*"shop_label": *"([^"]+)".*/\1/' || echo "pilot-shop")
+if [ -n "${START_SHA:-}" ] && [ "$HEAD_SHORT" != "$START_SHA" ]; then
+  DRIFT="⚠ RUNTIME CHANGED during pilot: ${START_SHA} → ${HEAD_SHORT}"
+else
+  DRIFT="✓ ${HEAD_SHORT} (matches start)"
 fi
 
-# Build identity: version from the health snapshot (no --version command exists),
-# exact build from git when run from a checkout (distinguishes rc1 from a hotfix).
-VERSION=$(grep -m1 '"version"' "$OUT/health.json" | sed -E 's/.*"version": *"([^"]+)".*/\1/' || true)
-HEAD=$(git rev-parse HEAD 2>/dev/null || echo "not a checkout")
+# Real identity stays in the git-ignored snapshot only. Seed a local template once so
+# the operator has somewhere to record it — pilot/ is git-ignored, so this never leaks.
+ID_FILE="pilot/identity.json"
+if [ ! -f "$ID_FILE" ]; then
+  cat > "$ID_FILE" <<'EOF'
+{ "shop": "<fill on the laptop>", "laptop": "<hostname>", "operator": "<name>" }
+EOF
+  echo "Seeded $ID_FILE (git-ignored) — fill in real shop/laptop/operator locally."
+fi
+
 {
   echo "collected_at: $STAMP"
-  echo "host:         $(hostname)"
+  echo "host:         $(hostname)"        # real host — kept ONLY in this ignored snapshot
   echo "version:      ${VERSION:-unknown}"
   echo "git_head:     $HEAD"
+  echo "start_sha:    ${START_SHA:-unknown}"
+  echo "build_drift:  $DRIFT"
+  echo "day:          ${DAYS_RUN:-?} / ${DAYS_TGT:-?}"
+  echo "uptime:       ${UPTIME_H}"
+  echo "rss:          ${RSS_MB}"
+  echo "disk:         ${DISK}"
 } > "$OUT/meta.txt"
 
-# Operator's free-form observations — the only instrument for the confusion gate.
+# Operator observations — the ONLY instrument the machine cannot produce. Keep it to
+# questions software can't truthfully answer (confusion + external incidents).
 cat > "$OUT/notes.txt" <<'EOF'
-Operator comments (verbatim — what they said and did):
+Operator observations — the only evidence the machine cannot collect.
+Tick what applies; everything else in the ledger is machine-generated.
 
+[ ] Confusing workflow?
+[ ] Unexpected behaviour?
+[ ] Report location unclear?
+[ ] Manual workaround needed?
+[ ] External incident (power / ISP / laptop closed unexpectedly)?
 
+Free text (verbatim — what they said and did):
 
 
 EOF
 
+# --- Auto-append the derived ledger row (raw snapshot above is the source of truth) -
+LEDGER="pilot-ledger.md"
+MARK="<!-- PILOT-COLLECT:APPEND-ABOVE"
+ROW="| ${TODAY} | ${SHOP_LABEL} @ ${HEAD_SHORT} | ${DAYS_RUN:-?} / ${DAYS_TGT:-?} | ${UPTIME_H} | — | ${DUP:-—} | ${CORR:-—} | ${MISS:-—} | ${SQL:-—} | ${DISK} | ${RSS_MB} | ${RESULT} | (auto; observations in pilot/${STAMP}/notes.txt) |"
+if grep -qF "$MARK" "$LEDGER" 2>/dev/null; then
+  tmp=$(mktemp)
+  awk -v mark="$MARK" -v row="$ROW" 'index($0, mark){print row} {print}' "$LEDGER" > "$tmp" && mv "$tmp" "$LEDGER"
+  echo "Ledger row appended for ${TODAY} (Day ${DAYS_RUN:-?}/${DAYS_TGT:-?}, ${RESULT})."
+else
+  echo "WARNING: append marker not found in $LEDGER — add this row by hand:" >&2
+  echo "$ROW" >&2
+fi
+
 echo ""
 echo "Pilot snapshot saved: $OUT"
 echo "  doctor.json health.json support/ rss.txt meta.txt notes.txt"
-echo "Now fill in notes.txt and the PILOT.md ledger row."
+echo "Build: $DRIFT"
+case "$DRIFT" in
+  ⚠*) echo "  ^ investigate before trusting today's gates — the artifact under test moved." ;;
+esac
+echo "Only manual step left: fill in pilot/${STAMP}/notes.txt (operator observations)."

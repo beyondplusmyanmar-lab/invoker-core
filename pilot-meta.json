@@ -1,0 +1,5 @@
+{
+  "_comment": "Authoritative, NON-SENSITIVE pilot metadata. The runtime owns the clock (doctor --pilot writes pilot_started_at; doctor.json reports daysRunning/daysTarget), so the day count is NOT duplicated here. This file carries only what the runtime cannot know: the build the pilot started on (drift check) and a redacted shop label. Real shop/laptop/operator identity lives ONLY in the git-ignored pilot/identity.json and is never committed to this public repo.",
+  "start_sha": "9a44d76",
+  "shop_label": "pilot-shop-01"
+}

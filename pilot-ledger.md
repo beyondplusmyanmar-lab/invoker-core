@@ -11,13 +11,14 @@ the protocol and gates, and [PILOT-START.md](PILOT-START.md) for the start recor
 | Date | Build | Days | Uptime | Reports (Expected/Produced) | Duplicate Renders | Corrupt Artifacts | Missed Schedules | SQLite Recovery | Disk | RSS | Result | Operator Comments |
 |------|-------|------|--------|------------------------------|-------------------|-------------------|------------------|-----------------|------|-----|--------|-------------------|
 | 2026-06-29 | v0.2.0-rc1 @ 9a44d76 | 0 / 7 | 15h | 0 / 0 | 0 | 0 | 0 | 0 | 57.6 GB free, 1 artifact (6.8 KB) | 74.5 MB | PASS (Day 0 baseline) | Pending operator observations. |
+<!-- PILOT-COLLECT:APPEND-ABOVE — scripts/pilot-collect inserts each day's row immediately above this line. Keep it directly after the last table row (no blank line between) so the table stays contiguous. -->
 
 ## 2026-06-29 — Day 0 (baseline)
 
 ### Machine observations
 
 - Snapshot: `pilot/20260629-054333`
-- Host: `doeh-frontliner`
+- Host: `<redacted — real value in git-ignored pilot/identity.json>`
 - `doctor --pilot`: `ok=true`, `passed=false` (expected: `daysRunning=0`, target = 7)
 - Scheduler: running
 - Coordinator: 0 pending, 0 collapses

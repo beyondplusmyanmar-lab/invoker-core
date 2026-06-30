@@ -3,16 +3,24 @@
 Fill this in on Day 1, on the shop laptop. The fields left as `<…>` /
 `YYYY-MM-DD` can only be known there; everything else is pinned to the build.
 
+**Identity (shop / laptop / operator) is NOT recorded in this public repo.** It
+lives only in the git-ignored `pilot/identity.json` (seeded automatically on the
+first `scripts/pilot-collect` run). The committed records carry a redacted
+`shop_label` from `pilot-meta.json` instead. The pilot **clock** is owned by the
+runtime — `doctor --pilot` writes `pilot_started_at` into the workspace and
+reports `daysRunning`/`daysTarget`; the repo never duplicates the day count, it
+only pins the **start SHA** (`pilot-meta.json` → `start_sha`) for the drift check.
+
 **Status:** ACTIVE (once started)
 
 | Field | Value |
 |-------|-------|
-| Started at | `YYYY-MM-DD HH:MM TZ` |
-| Shop | `<shop-id>` |
-| Laptop | `<hostname>` |
-| Operator | `<operator>` |
+| Started at | owned by runtime (`pilot_started_at` in workspace) |
+| Shop | redacted → `shop_label` in `pilot-meta.json`; real value in local `pilot/identity.json` |
+| Laptop | local `pilot/identity.json` only (never committed) |
+| Operator | local `pilot/identity.json` only (never committed) |
 | Build | v0.2.0-rc1 (tag `9e8972d`) |
-| Git head | `<record from pilot/<stamp>/meta.txt — the actual checkout sha>` |
+| Git head | `start_sha` in `pilot-meta.json` (drift-checked each run) |
 | Protocol | [PILOT.md](PILOT.md) |
 | Expected review date | `YYYY-MM-DD` (= start date + 6 days, end of Day 7) |
 | Freeze | ENFORCED |
@@ -77,8 +85,11 @@ scripts/pilot-collect
 
 After this there is intentionally nothing to engineer. For seven days:
 
-1. Run `scripts/pilot-collect` each morning.
-2. Fill in the [PILOT.md](PILOT.md) ledger row.
+1. Run `scripts/pilot-collect` each morning. It writes the snapshot, runs the
+   build-drift check, and **auto-appends the ledger row** (machine columns from
+   `doctor.json`; raw snapshot under `pilot/` is the source of truth).
+2. Fill in `pilot/<stamp>/notes.txt` — operator observations are the **only**
+   manual evidence; everything else is machine-generated.
 3. Archive any gate-failing snapshot.
 4. Apply the smallest bug fix **only** if a gate fails.
 
