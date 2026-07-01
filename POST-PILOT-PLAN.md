@@ -41,6 +41,31 @@ DOEH work does not touch the invoker-core runtime being validated, so it is the
 most productive thing to *plan and document* while Pilot A runs. The post-pilot
 queue is already fairly clear; the table below is the execution sequence.
 
+## Day 7 review checklist — run this BEFORE the execution sequence
+
+This gate decides *whether* to proceed; the execution sequence below decides
+*what* to proceed with. Do not read past it until every row is checked. Each row
+names its instrument, because a gate whose only instrument is the ledger is not
+green just because the ledger is empty (see the honesty map in
+[PILOT.md](PILOT.md)).
+
+| Gate | Instrument | Required |
+|------|------------|----------|
+| Seven-day evidence complete | `pilot-ledger.md` (Day 0 → Day 7; documented gaps are acceptable, silent gaps are not) | ✓ |
+| Runtime unchanged | `pilot-collect` runtime fingerprint — `src/` + `package.json` + `bun.lock` + `tsconfig.json`, **not** HEAD | ✓ |
+| RSS trend acceptable | daily RSS vs the 74.5 MB Day-0 baseline — no sustained growth | ✓ |
+| No duplicate renders / corrupt artifacts / missed schedules / SQLite recoveries | `doctor --pilot` (machine) | ✓ (all 0) |
+| No disk exhaustion | `health` + retention (machine-observable) | ✓ |
+| Operator confusion ≤ target | per-day `notes.txt` (human observation only — no machine sensor) | ✓ |
+| No P0 correctness issue | the finding-triage ladder over all evidence | ✓ |
+| Governance review signed | this document + ledger reviewed and dated | ✓ |
+
+**Decision:**
+
+- **All PASS** → unlock the P0 DOEH implementation chain (below) **and** unfreeze rc2 as product work.
+- **PARTIAL** (no data loss, usability issues only, no architectural assumption invalidated) → targeted v0.2.x fixes only; roadmap stays gated.
+- **FAIL** (any correctness gate breached, or operator cannot complete the morning workflow) → suspend the roadmap; the failing gate becomes the next engineering task, now backed by real evidence.
+
 ## Execution sequence (post-pilot)
 
 | Priority | Item | Prerequisite | Current state (verify before starting) |
