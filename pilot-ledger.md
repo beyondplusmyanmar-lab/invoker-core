@@ -62,3 +62,29 @@ Specifically compare:
 If tomorrow's snapshot remains similarly clean, this is the first meaningful
 evidence that the scheduler, persistence, and daemon are stable under continuous
 operation rather than just a successful startup.
+
+## 2026-06-30 — Day 1 (no entry) — evidence-integrity note
+
+**No Day 1 ledger entry exists. This is a documentation gap only, not a pilot
+failure.** No evidence indicates a runtime failure or interruption between the
+Day 0 baseline (2026-06-29) and the Day 2 collection (2026-07-01); the daemon's
+continuous uptime across that window (15h → 65h) is consistent with an
+uninterrupted run. The omission occurred simply because no collection was
+recorded on Day 1.
+
+This row is deliberately **not** reconstructed. A pilot ledger is an audit log of
+what was actually observed, not what was probably true, so no synthetic
+"Day 1 — PASS" row is inserted. Fabricating an unobserved-but-likely row would
+weaken the integrity of the entire evidence trail.
+
+Tooling context (both changes are freeze-safe; the runtime artifact under test is
+unchanged): from commit `cc07e94`, `scripts/pilot-collect` was made more
+deterministic to reduce the chance of a future missed collection; from commit
+`a07c43d`, the runtime drift check distinguishes runtime changes from
+documentation/tooling changes, so later entries carry a more trustworthy build
+signal. These reduce the likelihood of future evidence gaps without altering what
+is being measured.
+
+**For the Day 7 review:** treat the missing Day 1 entry as a governance /
+documentation limitation, not as evidence of a pilot failure or a correctness
+gate breach.
