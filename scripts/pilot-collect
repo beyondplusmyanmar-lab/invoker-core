@@ -68,15 +68,34 @@ if grep '"ok"' "$dj" 2>/dev/null | tail -1 | grep -q true; then RESULT="PASS"; e
 DISK=$(df -BG "$WS" 2>/dev/null | awk 'NR==2{gsub(/G/,"",$4); print $4" GB free"}' || echo "—")
 
 # --- Build identity + drift check (catches an accidental upgrade mid-pilot) --------
+# The pilot tests ONE frozen runtime artifact for 7 days. A blunt HEAD-vs-start_sha
+# compare false-alarms on docs/tooling commits that never touch the compiled binary,
+# so we fingerprint only RUNTIME-RELEVANT paths: the `invoker` binary is a function of
+# src/ (which contains schema.sql), package.json, bun.lock, tsconfig.json — nothing
+# else. Docs, this collector, and pilot files may move freely without invalidating a
+# gate. When HEAD has moved but no runtime path changed, we say so AND list what did.
 VERSION=$(grep -m1 '"version"' "$OUT/health.json" 2>/dev/null | sed -E 's/.*"version": *"([^"]+)".*/\1/' || true)
 HEAD_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 HEAD=$(git rev-parse HEAD 2>/dev/null || echo "not a checkout")
 START_SHA=$(grep -m1 '"start_sha"' pilot-meta.json 2>/dev/null | sed -E 's/.*"start_sha": *"([^"]+)".*/\1/' || true)
 SHOP_LABEL=$(grep -m1 '"shop_label"' pilot-meta.json 2>/dev/null | sed -E 's/.*"shop_label": *"([^"]+)".*/\1/' || echo "pilot-shop")
-if [ -n "${START_SHA:-}" ] && [ "$HEAD_SHORT" != "$START_SHA" ]; then
-  DRIFT="⚠ RUNTIME CHANGED during pilot: ${START_SHA} → ${HEAD_SHORT}"
+
+RUNTIME_PATHS=(src package.json bun.lock tsconfig.json)
+RUNTIME_DRIFT_FILES=""
+DOC_DRIFT_FILES=""
+if [ -z "${START_SHA:-}" ]; then
+  DRIFT="? start_sha unknown — cannot check drift (is pilot-meta.json present?)"
+elif [ "$HEAD_SHORT" = "$START_SHA" ]; then
+  DRIFT="✓ runtime unchanged — HEAD ${HEAD_SHORT} matches start"
 else
-  DRIFT="✓ ${HEAD_SHORT} (matches start)"
+  RUNTIME_DRIFT_FILES=$(git diff --name-only "$START_SHA" HEAD -- "${RUNTIME_PATHS[@]}" 2>/dev/null || true)
+  DOC_DRIFT_FILES=$(git diff --name-only "$START_SHA" HEAD -- \
+    ':(exclude)src' ':(exclude)package.json' ':(exclude)bun.lock' ':(exclude)tsconfig.json' 2>/dev/null || true)
+  if [ -n "$RUNTIME_DRIFT_FILES" ]; then
+    DRIFT="⚠ RUNTIME CHANGED during pilot: ${START_SHA} → ${HEAD_SHORT}"
+  else
+    DRIFT="✓ runtime unchanged since ${START_SHA} — only docs/tooling moved (HEAD ${HEAD_SHORT})"
+  fi
 fi
 
 # Real identity stays in the git-ignored snapshot only. Seed a local template once so
@@ -96,6 +115,14 @@ fi
   echo "git_head:     $HEAD"
   echo "start_sha:    ${START_SHA:-unknown}"
   echo "build_drift:  $DRIFT"
+  if [ -n "$RUNTIME_DRIFT_FILES" ]; then
+    echo "runtime_files_changed:"
+    printf '  %s\n' $RUNTIME_DRIFT_FILES
+  fi
+  if [ -n "$DOC_DRIFT_FILES" ]; then
+    echo "docs/tooling_changed (not runtime):"
+    printf '  %s\n' $DOC_DRIFT_FILES
+  fi
   echo "day:          ${DAYS_RUN:-?} / ${DAYS_TGT:-?}"
   echo "uptime:       ${UPTIME_H}"
   echo "rss:          ${RSS_MB}"
@@ -137,6 +164,11 @@ echo "Pilot snapshot saved: $OUT"
 echo "  doctor.json health.json support/ rss.txt meta.txt notes.txt"
 echo "Build: $DRIFT"
 case "$DRIFT" in
-  ⚠*) echo "  ^ investigate before trusting today's gates — the artifact under test moved." ;;
+  ⚠*) echo "  ^ investigate before trusting today's gates — the artifact under test moved:"
+      printf '      %s\n' $RUNTIME_DRIFT_FILES ;;
+  *)  if [ -n "$DOC_DRIFT_FILES" ]; then
+        echo "  docs/tooling changed since pilot start (no runtime files):"
+        printf '      %s\n' $DOC_DRIFT_FILES
+      fi ;;
 esac
 echo "Only manual step left: fill in pilot/${STAMP}/notes.txt (operator observations)."
