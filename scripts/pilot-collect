@@ -24,6 +24,21 @@ command -v invoker >/dev/null || { echo "invoker not on PATH" >&2; exit 1; }
 
 STAMP=$(date +"%Y%m%d-%H%M%S")
 TODAY=$(date +"%Y-%m-%d")
+
+# One row per calendar day: the ledger is daily evidence, so a second run (e.g. the
+# cron fallback after a manual morning run) must not double-append. Pass --force to
+# collect an extra snapshot anyway (it still skips the ledger append below).
+FORCE=0
+[ "${1:-}" = "--force" ] && FORCE=1
+if grep -qE "^\| ${TODAY} \|" pilot-ledger.md 2>/dev/null; then
+  if [ "$FORCE" -eq 0 ]; then
+    echo "Already collected today (${TODAY} row exists in pilot-ledger.md) — nothing to do."
+    exit 0
+  fi
+  ALREADY_LOGGED=1
+else
+  ALREADY_LOGGED=0
+fi
 OUT="pilot/${STAMP}"
 mkdir -p "$OUT/support"
 
@@ -150,7 +165,9 @@ EOF
 LEDGER="pilot-ledger.md"
 MARK="<!-- PILOT-COLLECT:APPEND-ABOVE"
 ROW="| ${TODAY} | ${SHOP_LABEL} @ ${HEAD_SHORT} | ${DAYS_RUN:-?} / ${DAYS_TGT:-?} | ${UPTIME_H} | — | ${DUP:-—} | ${CORR:-—} | ${MISS:-—} | ${SQL:-—} | ${DISK} | ${RSS_MB} | ${RESULT} | (auto; observations in pilot/${STAMP}/notes.txt) |"
-if grep -qF "$MARK" "$LEDGER" 2>/dev/null; then
+if [ "${ALREADY_LOGGED}" -eq 1 ]; then
+  echo "Ledger already has a ${TODAY} row — snapshot saved, append skipped (--force run)."
+elif grep -qF "$MARK" "$LEDGER" 2>/dev/null; then
   tmp=$(mktemp)
   awk -v mark="$MARK" -v row="$ROW" 'index($0, mark){print row} {print}' "$LEDGER" > "$tmp" && mv "$tmp" "$LEDGER"
   echo "Ledger row appended for ${TODAY} (Day ${DAYS_RUN:-?}/${DAYS_TGT:-?}, ${RESULT})."

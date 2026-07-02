@@ -12,6 +12,7 @@ the protocol and gates, and [PILOT-START.md](PILOT-START.md) for the start recor
 |------|-------|------|--------|------------------------------|-------------------|-------------------|------------------|-----------------|------|-----|--------|-------------------|
 | 2026-06-29 | v0.2.0-rc1 @ 9a44d76 | 0 / 7 | 15h | 0 / 0 | 0 | 0 | 0 | 0 | 57.6 GB free, 1 artifact (6.8 KB) | 74.5 MB | PASS (Day 0 baseline) | Pending operator observations. |
 | 2026-07-01 | pilot-shop-01 @ cc07e94 | 2 / 7 | 65h | — | 0 | 0 | 0 | 0 | 54 GB free | 74.9 MB | PASS | (auto; observations in pilot/20260701-074916/notes.txt) |
+| 2026-07-02 | pilot-shop-01 @ 0b6ee56 | 3 / 7 | 82h | — | 0 | 0 | 0 | 0 | 53 GB free | 75.6 MB | PASS | (auto; observations in pilot/20260702-010333/notes.txt) |
 <!-- PILOT-COLLECT:APPEND-ABOVE — scripts/pilot-collect inserts each day's row immediately above this line. Keep it directly after the last table row (no blank line between) so the table stays contiguous. -->
 
 ## 2026-06-29 — Day 0 (baseline)
